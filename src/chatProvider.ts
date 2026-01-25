@@ -51,6 +51,9 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
                     case 'reconnect':
                         await this.reconnect();
                         break;
+                    case 'openSettings':
+                        vscode.commands.executeCommand('workbench.action.openSettings', 'ollamaAgent');
+                        break;
                     case 'createFile':
                         await this.createFile(message.path, message.content);
                         break;
@@ -211,12 +214,50 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         return cleaned;
     }
 
+    private async deleteFile(filePath: string) {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('Nenhum workspace aberto');
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri;
+            const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+            
+            // Verifica se o arquivo existe antes de deletar
+            try {
+                await vscode.workspace.fs.stat(fileUri);
+            } catch {
+                throw new Error('Arquivo não encontrado: ' + filePath);
+            }
+
+            await vscode.workspace.fs.delete(fileUri, { recursive: false });
+
+            this.view?.webview.postMessage({
+                command: 'fileDeleted',
+                path: filePath,
+                success: true
+            });
+
+            vscode.window.showInformationMessage('Arquivo deletado: ' + filePath);
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao deletar arquivo:', error);
+            this.view?.webview.postMessage({
+                command: 'fileDeleted',
+                path: filePath,
+                success: false
+            });
+            vscode.window.showErrorMessage('Erro ao deletar arquivo: ' + filePath);
+        }
+    }
+
     private async processAgentActions(message: string) {
         // Regex mais flexível para capturar o padrão mesmo com markdown misturado
         const fileRegex = /\[CRIAR_ARQUIVO:([^\]]+)\]([\s\S]*?)\[\/CRIAR_ARQUIVO\]/g;
         const cmdRegex = /\[EXECUTAR_COMANDO\]([\s\S]*?)\[\/EXECUTAR_COMANDO\]/g;
         const readRegex = /\[LER_ARQUIVO:([^\]]+)\]\[\/LER_ARQUIVO\]/g;
         const listRegex = /\[LISTAR_DIRETORIO:([^\]]*)\]\[\/LISTAR_DIRETORIO\]/g;
+        const deleteRegex = /\[DELETAR_ARQUIVO:([^\]]+)\]\[\/DELETAR_ARQUIVO\]/g;
 
         let match;
 
@@ -250,6 +291,13 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
             const dirPath = match[1].trim();
             console.log('[Agent] Listando diretório:', dirPath);
             await this.listDirectory(dirPath);
+        }
+
+        // Processa deleção de arquivos
+        while ((match = deleteRegex.exec(message)) !== null) {
+            const filePath = match[1].trim();
+            console.log('[Agent] Deletando arquivo:', filePath);
+            await this.deleteFile(filePath);
         }
     }
 
@@ -347,7 +395,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         if (this.messages.length === 0) {
             this.messages.push({
                 role: 'system',
-                content: 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
+                content: 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n### Deletar arquivo:\n[DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n5. CUIDADO ao deletar arquivos - confirme antes se necessário\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
             });
         }
 
@@ -592,10 +640,6 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                <button class="icon-btn" id="reloadBtn" title="Reconectar">🔄</button>\n' +
 '            </div>\n' +
 '        </div>\n' +
-'        <div class="server-config" id="serverConfig">\n' +
-'            <input type="text" class="server-input" id="serverInput" value="' + serverUrl + '" placeholder="http://192.168.1.86:11434">\n' +
-'            <button class="btn" id="saveServerBtn">Salvar</button>\n' +
-'        </div>\n' +
 '    </div>\n' +
 '\n' +
 '    <div class="chat-container" id="chatContainer">\n' +
@@ -621,9 +665,6 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            var clearBtn = document.getElementById("clearBtn");\n' +
 '            var settingsBtn = document.getElementById("settingsBtn");\n' +
 '            var reloadBtn = document.getElementById("reloadBtn");\n' +
-'            var serverConfig = document.getElementById("serverConfig");\n' +
-'            var serverInput = document.getElementById("serverInput");\n' +
-'            var saveServerBtn = document.getElementById("saveServerBtn");\n' +
 '            var modelSelect = document.getElementById("modelSelect");\n' +
 '            var statusDot = document.getElementById("statusDot");\n' +
 '            var statusText = document.getElementById("statusText");\n' +
@@ -659,7 +700,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            });\n' +
 '\n' +
 '            settingsBtn.addEventListener("click", function() {\n' +
-'                serverConfig.classList.toggle("visible");\n' +
+'                vscode.postMessage({ command: "openSettings" });\n' +
 '            });\n' +
 '\n' +
 '            reloadBtn.addEventListener("click", function() {\n' +
@@ -674,14 +715,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                }, 2000);\n' +
 '            });\n' +
 '\n' +
-'            saveServerBtn.addEventListener("click", function() {\n' +
-'                var url = serverInput.value.trim();\n' +
-'                if (url) {\n' +
-'                    vscode.postMessage({ command: "updateServer", serverUrl: url });\n' +
-'                    serverConfig.classList.remove("visible");\n' +
-'                }\n' +
-'            });\n' +
-'\n' +
+
 '            modelSelect.addEventListener("change", function() {\n' +
 '                var model = modelSelect.value;\n' +
 '                if (model) {\n' +
@@ -754,13 +788,65 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '\n' +
 '            function cleanAndFormatMessage(element) {\n' +
 '                var content = element.textContent;\n' +
-'                var html = escapeHtml(content);\n' +
-'                html = html.replace(/\\\\[CRIAR_ARQUIVO:[^\\\\]]+\\\\][\\\\s\\\\S]*?\\\\[\\\\/CRIAR_ARQUIVO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(0,200,0,0.1);border-left:3px solid #4CAF50;border-radius:4px;">✅ <strong>Arquivo criado!</strong></div>\');\n' +
-'                html = html.replace(/\\\\[EXECUTAR_COMANDO\\\\][\\\\s\\\\S]*?\\\\[\\\\/EXECUTAR_COMANDO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(0,150,255,0.1);border-left:3px solid #2196F3;border-radius:4px;">⚡ <strong>Comando executado!</strong></div>\');\n' +
-'                html = html.replace(/\\\\[LER_ARQUIVO:[^\\\\]]+\\\\]\\\\[\\\\/LER_ARQUIVO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(255,200,0,0.1);border-left:3px solid #FF9800;border-radius:4px;">📖 <strong>Arquivo lido</strong></div>\');\n' +
-'                html = html.replace(/\\\\[LISTAR_DIRETORIO:[^\\\\]]*\\\\]\\\\[\\\\/LISTAR_DIRETORIO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(150,0,255,0.1);border-left:3px solid #9C27B0;border-radius:4px;">📂 <strong>Diretório listado</strong></div>\');\n' +
-'                html = html.replace(/```[\\\\w]*[\\\\s\\\\S]*?```/g, \'\');\n' +
-'                element.innerHTML = html;\n' +
+'                var html = content;\n' +
+'                \n' +
+'                // Extrai e substitui CRIAR_ARQUIVO - captura nome e conteúdo\n' +
+'                var fileRegex = /\\[CRIAR_ARQUIVO:([^\\]]+)\\]([\\s\\S]*?)\\[\\/CRIAR_ARQUIVO\\]/g;\n' +
+'                html = html.replace(fileRegex, function(match, fileName, fileContent) {\n' +
+'                    var cleanContent = fileContent.trim().replace(/^```[\\w]*\\n?/, "").replace(/```$/, "").trim();\n' +
+'                    return "✅ ARQUIVO_CRIADO: " + fileName.trim() + "\\n___CODE_START___" + cleanContent + "___CODE_END___";\n' +
+'                });\n' +
+'                \n' +
+'                // Extrai e substitui EXECUTAR_COMANDO\n' +
+'                var cmdRegex = /\\[EXECUTAR_COMANDO\\]([\\s\\S]*?)\\[\\/EXECUTAR_COMANDO\\]/g;\n' +
+'                html = html.replace(cmdRegex, function(match, cmd) {\n' +
+'                    return "⚡ COMANDO_EXECUTADO: " + cmd.trim();\n' +
+'                });\n' +
+'                \n' +
+'                // Extrai e substitui LER_ARQUIVO\n' +
+'                var readRegex = /\\[LER_ARQUIVO:([^\\]]+)\\]\\[\\/LER_ARQUIVO\\]/g;\n' +
+'                html = html.replace(readRegex, function(match, fileName) {\n' +
+'                    return "📖 ARQUIVO_LIDO: " + fileName.trim();\n' +
+'                });\n' +
+'                \n' +
+'                // Extrai e substitui LISTAR_DIRETORIO\n' +
+'                var listRegex = /\\[LISTAR_DIRETORIO:([^\\]]*)\\]\\[\\/LISTAR_DIRETORIO\\]/g;\n' +
+'                html = html.replace(listRegex, function(match, dir) {\n' +
+'                    return "📂 DIRETORIO_LISTADO: " + (dir.trim() || "/");\n' +
+'                });\n' +
+'                \n' +
+'                // Extrai e substitui DELETAR_ARQUIVO\n' +
+'                var deleteRegex = /\\[DELETAR_ARQUIVO:([^\\]]+)\\]\\[\\/DELETAR_ARQUIVO\\]/g;\n' +
+'                html = html.replace(deleteRegex, function(match, fileName) {\n' +
+'                    return "🗑️ ARQUIVO_DELETADO: " + fileName.trim();\n' +
+'                });\n' +
+'                \n' +
+'                // Formata blocos de código markdown\n' +
+'                html = html.replace(/```([\\w]*)\\n?([\\s\\S]*?)```/g, function(match, lang, code) {\n' +
+'                    return "___CODEBLOCK_START___" + (lang || "") + "___CODELANG___" + code.trim() + "___CODEBLOCK_END___";\n' +
+'                });\n' +
+'                \n' +
+'                // Escapa HTML e formata\n' +
+'                var escaped = escapeHtml(html);\n' +
+'                \n' +
+'                // Formata blocos de código markdown\n' +
+'                escaped = escaped.replace(/___CODEBLOCK_START___(\\w*)___CODELANG___([\\s\\S]*?)___CODEBLOCK_END___/g, function(match, lang, code) {\n' +
+'                    var langLabel = lang ? \'<span style="position:absolute;top:4px;right:8px;font-size:10px;color:rgba(255,255,255,0.5);text-transform:uppercase;">\' + lang + \'</span>\' : "";\n' +
+'                    return \'<div style="position:relative;margin:8px 0;"><pre style="margin:0;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;overflow-x:auto;font-family:monospace;font-size:12px;white-space:pre-wrap;">\' + langLabel + \'<code>\' + code + \'</code></pre></div>\';\n' +
+'                });\n' +
+'                \n' +
+'                // Formata o bloco de código do CRIAR_ARQUIVO (antes de escapar o resto)\n' +
+'                escaped = escaped.replace(/✅ ARQUIVO_CRIADO: ([^\\n]+)\\n___CODE_START___([\\s\\S]*?)___CODE_END___/g, function(match, fileName, code) {\n' +
+'                    return \'<div style="margin:8px 0;padding:10px;background:rgba(0,200,0,0.1);border-left:3px solid #4CAF50;border-radius:4px;"><strong>✅ Arquivo criado:</strong><code style="display:block;margin-top:6px;padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:3px;">\' + fileName + \'</code><pre style="margin-top:8px;padding:10px;background:rgba(0,0,0,0.3);border-radius:4px;overflow-x:auto;font-family:monospace;font-size:12px;white-space:pre-wrap;"><code>\' + code + \'</code></pre></div>\';\n' +
+'                });\n' +
+'                \n' +
+'                // Formata os outros marcadores\n' +
+'                escaped = escaped.replace(/⚡ COMANDO_EXECUTADO: ([^\\n]+)/g, \'<div style="margin:8px 0;padding:10px;background:rgba(0,150,255,0.1);border-left:3px solid #2196F3;border-radius:4px;"><strong>⚡ Comando executado:</strong><code style="display:block;margin-top:6px;padding:8px;background:rgba(0,0,0,0.2);border-radius:3px;font-family:monospace;">$1</code></div>\');\n' +
+'                escaped = escaped.replace(/📖 ARQUIVO_LIDO: ([^\\n]+)/g, \'<div style="margin:8px 0;padding:10px;background:rgba(255,200,0,0.1);border-left:3px solid #FF9800;border-radius:4px;"><strong>📖 Arquivo lido:</strong><code style="display:block;margin-top:6px;padding:8px;background:rgba(0,0,0,0.2);border-radius:3px;">$1</code></div>\');\n' +
+'                escaped = escaped.replace(/📂 DIRETORIO_LISTADO: ([^\\n]+)/g, \'<div style="margin:8px 0;padding:10px;background:rgba(150,0,255,0.1);border-left:3px solid #9C27B0;border-radius:4px;"><strong>📂 Diretório listado:</strong><code style="display:block;margin-top:6px;padding:8px;background:rgba(0,0,0,0.2);border-radius:3px;">$1</code></div>\');\n' +
+'                escaped = escaped.replace(/🗑️ ARQUIVO_DELETADO: ([^\\n]+)/g, \'<div style="margin:8px 0;padding:10px;background:rgba(255,0,0,0.1);border-left:3px solid #F44336;border-radius:4px;"><strong>🗑️ Arquivo deletado:</strong><code style="display:block;margin-top:6px;padding:8px;background:rgba(0,0,0,0.2);border-radius:3px;">$1</code></div>\');\n' +
+'                \n' +
+'                element.innerHTML = escaped;\n' +
 '            }\n' +
 '\n' +
 '            function escapeHtml(text) {\n' +
