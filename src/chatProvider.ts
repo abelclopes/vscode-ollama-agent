@@ -7,6 +7,26 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
     private messages: OllamaMessage[] = [];
     private terminal?: vscode.Terminal;
     private agentMode: boolean = true;
+    private workspaceContext: string = '';
+    private workspaceContextLoaded: boolean = false;
+
+    // Extensões de arquivos que devem ser lidos para contexto
+    private readonly codeExtensions = [
+        '.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.c', '.cpp', '.h', '.hpp',
+        '.cs', '.go', '.rs', '.rb', '.php', '.swift', '.kt', '.scala', '.vue',
+        '.html', '.css', '.scss', '.sass', '.less', '.json', '.yaml', '.yml',
+        '.xml', '.md', '.txt', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
+        '.sql', '.graphql', '.prisma', '.dockerfile', '.env', '.gitignore',
+        '.eslintrc', '.prettierrc', '.editorconfig', 'Makefile', 'Dockerfile'
+    ];
+
+    // Pastas que devem ser ignoradas
+    private readonly ignoredFolders = [
+        'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
+        'coverage', '.nyc_output', '__pycache__', '.pytest_cache', 'venv',
+        '.venv', 'env', '.env', 'vendor', 'target', 'bin', 'obj', '.idea',
+        '.vscode', '.vs', 'packages', '.gradle', '.maven'
+    ];
 
     constructor(private context: vscode.ExtensionContext) {
         this.ollamaClient = new OllamaClient();
@@ -393,20 +413,185 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /**
+     * Verifica se a mensagem do usuário requer contexto do workspace
+     */
+    private needsWorkspaceContext(text: string): boolean {
+        const lowerText = text.toLowerCase();
+        const contextKeywords = [
+            'analise', 'analisar', 'analisa', 'análise',
+            'código', 'codigo', 'code',
+            'projeto', 'project',
+            'workspace', 'repositório', 'repositorio',
+            'arquivos', 'files',
+            'estrutura', 'structure',
+            'entenda', 'entender', 'understand',
+            'explique', 'explicar', 'explain',
+            'revise', 'revisar', 'review',
+            'melhore', 'melhorar', 'improve',
+            'refatore', 'refatorar', 'refactor',
+            'bug', 'erro', 'error', 'problema', 'problem',
+            'funciona', 'funcionando', 'working',
+            'implementação', 'implementacao', 'implementation',
+            'como está', 'como esta', 'how is',
+            'o que faz', 'what does', 'como funciona'
+        ];
+        
+        return contextKeywords.some(keyword => lowerText.includes(keyword));
+    }
+
+    /**
+     * Verifica se um arquivo deve ser incluído no contexto baseado na extensão
+     */
+    private shouldIncludeFile(fileName: string): boolean {
+        const lowerName = fileName.toLowerCase();
+        return this.codeExtensions.some(ext => 
+            lowerName.endsWith(ext) || lowerName === ext.replace('.', '')
+        );
+    }
+
+    /**
+     * Escaneia recursivamente o workspace e coleta arquivos de código
+     */
+    private async scanWorkspaceRecursive(
+        uri: vscode.Uri, 
+        relativePath: string = ''
+    ): Promise<{ path: string; content: string }[]> {
+        const results: { path: string; content: string }[] = [];
+        
+        try {
+            const entries = await vscode.workspace.fs.readDirectory(uri);
+            
+            for (const [name, type] of entries) {
+                const fullPath = relativePath ? `${relativePath}/${name}` : name;
+                const fileUri = vscode.Uri.joinPath(uri, name);
+                
+                if (type === vscode.FileType.Directory) {
+                    // Ignora pastas na lista de ignorados
+                    if (this.ignoredFolders.includes(name.toLowerCase())) {
+                        continue;
+                    }
+                    
+                    // Escaneia recursivamente
+                    const subResults = await this.scanWorkspaceRecursive(fileUri, fullPath);
+                    results.push(...subResults);
+                } else if (type === vscode.FileType.File) {
+                    // Verifica se é um arquivo de código
+                    if (this.shouldIncludeFile(name)) {
+                        try {
+                            const contentBytes = await vscode.workspace.fs.readFile(fileUri);
+                            const content = Buffer.from(contentBytes).toString('utf8');
+                            
+                            // Limita tamanho do arquivo (máximo 50KB por arquivo)
+                            if (content.length <= 50000) {
+                                results.push({ path: fullPath, content });
+                            }
+                        } catch (e) {
+                            console.warn('[ChatProvider] Erro ao ler arquivo:', fullPath, e);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[ChatProvider] Erro ao escanear diretório:', uri.path, e);
+        }
+        
+        return results;
+    }
+
+    /**
+     * Carrega o contexto completo do workspace
+     */
+    private async loadWorkspaceContext(): Promise<string> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            return '';
+        }
+
+        console.log('[ChatProvider] Iniciando leitura do workspace...');
+        
+        const workspaceRoot = workspaceFolders[0].uri;
+        const files = await this.scanWorkspaceRecursive(workspaceRoot);
+        
+        if (files.length === 0) {
+            return '';
+        }
+
+        // Monta o contexto com todos os arquivos
+        let context = '=== CONTEXTO DO WORKSPACE ===\n\n';
+        context += `Total de arquivos: ${files.length}\n\n`;
+        
+        for (const file of files) {
+            context += `--- Arquivo: ${file.path} ---\n`;
+            context += file.content;
+            context += '\n\n';
+        }
+        
+        context += '=== FIM DO CONTEXTO ===\n';
+        
+        console.log(`[ChatProvider] Workspace carregado: ${files.length} arquivos`);
+        
+        return context;
+    }
+
+    /**
+     * Obtém ou carrega o contexto do workspace
+     */
+    private async getWorkspaceContext(): Promise<string> {
+        if (!this.workspaceContextLoaded) {
+            this.workspaceContext = await this.loadWorkspaceContext();
+            this.workspaceContextLoaded = true;
+        }
+        return this.workspaceContext;
+    }
+
+    /**
+     * Invalida o cache do contexto do workspace (para quando arquivos mudarem)
+     */
+    public invalidateWorkspaceContext() {
+        this.workspaceContextLoaded = false;
+        this.workspaceContext = '';
+    }
+
     private async handleUserMessage(text: string) {
         if (!text.trim()) return;
 
         console.log('[ChatProvider] Processando mensagem:', text.substring(0, 50));
 
+        // Verifica se precisa carregar contexto do workspace
+        let workspaceContext = '';
+        if (this.agentMode && this.needsWorkspaceContext(text)) {
+            // Envia mensagem de "Pensando..." enquanto carrega o contexto
+            this.view?.webview.postMessage({
+                command: 'thinking',
+                text: '🧠 Pensando... Analisando o código do workspace...'
+            });
+            
+            workspaceContext = await this.getWorkspaceContext();
+            
+            // Remove mensagem de pensando
+            this.view?.webview.postMessage({
+                command: 'thinkingComplete'
+            });
+        }
+
         if (this.messages.length === 0) {
-            const systemPrompt = this.agentMode 
+            let systemPrompt = this.agentMode 
                 ? 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n### Deletar arquivo:\n[DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n5. CUIDADO ao deletar arquivos - confirme antes se necessário\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
                 : 'Você é um assistente de programação amigável e prestativo. Responda perguntas sobre código, ajude a explicar conceitos e forneça exemplos quando solicitado. Use blocos de código markdown para mostrar exemplos de código.';
+            
+            // Adiciona contexto do workspace ao system prompt se disponível
+            if (workspaceContext) {
+                systemPrompt += '\n\n' + workspaceContext;
+            }
             
             this.messages.push({
                 role: 'system',
                 content: systemPrompt
             });
+        } else if (workspaceContext && !this.messages[0].content.includes('=== CONTEXTO DO WORKSPACE ===')) {
+            // Se já tem mensagens mas ainda não tem contexto, adiciona ao system prompt
+            this.messages[0].content += '\n\n' + workspaceContext;
         }
 
         this.messages.push({ role: 'user', content: text });
@@ -907,6 +1092,27 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                chatContainer.appendChild(div);\n' +
 '                chatContainer.scrollTop = chatContainer.scrollHeight;\n' +
 '            }\n' +
+'\n' +'            var thinkingElement = null;\n' +
+'            function showThinking(text) {\n' +
+'                removeEmptyState();\n' +
+'                if (thinkingElement) {\n' +
+'                    thinkingElement.querySelector(".message-content").textContent = text;\n' +
+'                    return;\n' +
+'                }\n' +
+'                var div = document.createElement("div");\n' +
+'                div.className = "message assistant thinking-message";\n' +
+'                div.innerHTML = \'<div class="message-header">🧠 Processando</div><div class="message-content" style="font-style:italic;opacity:0.8;"></div>\';\n' +
+'                div.querySelector(".message-content").textContent = text;\n' +
+'                chatContainer.appendChild(div);\n' +
+'                thinkingElement = div;\n' +
+'                chatContainer.scrollTop = chatContainer.scrollHeight;\n' +
+'            }\n' +
+'\n' +'            function hideThinking() {\n' +
+'                if (thinkingElement) {\n' +
+'                    thinkingElement.remove();\n' +
+'                    thinkingElement = null;\n' +
+'                }\n' +
+'            }\n' +
 '\n' +'            function startAssistantMessage() {\n' +
 '                removeEmptyState();\n' +
 '                var div = document.createElement("div");\n' +
@@ -1093,6 +1299,12 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                        if (msg.success) {\n' +
 '                            addSystemMessage(msg.content);\n' +
 '                        }\n' +
+'                        break;\n' +
+'                    case "thinking":\n' +
+'                        showThinking(msg.text);\n' +
+'                        break;\n' +
+'                    case "thinkingComplete":\n' +
+'                        hideThinking();\n' +
 '                        break;\n' +
 '                }\n' +
 '            });\n' +

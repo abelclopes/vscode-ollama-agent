@@ -1,6 +1,6 @@
 ## Prompt para Gerar Extensão VS Code - Ollama Chat Agent
 
-Crie uma extensão para Visual Studio Code que funcione como um agente de IA conectado a um servidor Ollama local. A extensão deve ter uma interface de chat na barra lateral e ser capaz de criar arquivos e executar comandos no terminal.
+Crie uma extensão para Visual Studio Code que funcione como um agente de IA conectado a um servidor Ollama local. A extensão deve ter uma interface de chat na barra lateral e ser capaz de criar arquivos, executar comandos no terminal e analisar automaticamente o código do workspace.
 
 ### Requisitos Técnicos:
 
@@ -37,8 +37,19 @@ vscode-ollama-agent/
    - Área de mensagens com suporte a streaming (exibir resposta caractere por caractere)
    - Input de texto com envio por Enter ou botão
    - Botão para limpar histórico
+   - Exibir mensagem "🧠 Pensando..." durante análise do workspace
 
-3. **Capacidades do Agente:**
+3. **Análise Automática do Workspace:**
+   - Escanear recursivamente todos os arquivos de código do workspace
+   - Detectar automaticamente quando o usuário pede análise do código (palavras-chave: "analise", "código", "projeto", "explique", "refatore", "bug", etc.)
+   - Carregar contexto completo do código para o modelo tomar decisões informadas
+   - Exibir indicador visual "🧠 Pensando... Analisando o código do workspace..." enquanto carrega
+   - Cache do contexto com invalidação automática quando arquivos são modificados
+   - Extensões suportadas: `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.java`, `.json`, `.html`, `.css`, `.md`, etc.
+   - Pastas ignoradas: `node_modules`, `.git`, `dist`, `build`, `__pycache__`, `venv`, etc.
+   - Limite de 50KB por arquivo para evitar sobrecarga
+
+4. **Capacidades do Agente:**
    - Criar arquivos no workspace quando a IA responder com formato especial:
      ```
      [CRIAR_ARQUIVO:caminho/arquivo.ext]
@@ -51,9 +62,21 @@ vscode-ollama-agent/
      npm install express
      [/EXECUTAR_COMANDO]
      ```
+   - Ler arquivos existentes:
+     ```
+     [LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]
+     ```
+   - Listar diretórios:
+     ```
+     [LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]
+     ```
+   - Deletar arquivos:
+     ```
+     [DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]
+     ```
    - Exibir botões clicáveis para confirmar criação de arquivo ou execução de comando
 
-4. **Configurações (contributes.configuration):**
+5. **Configurações (contributes.configuration):**
    - `ollamaAgent.serverUrl`: URL do servidor (default: "http://192.168.1.86:11434")
    - `ollamaAgent.model`: Modelo padrão (default: "qwen2.5-coder:latest")
    - `ollamaAgent.temperature`: Temperatura (default: 0.7)
@@ -129,19 +152,50 @@ vscode-ollama-agent/
    - O HTML do webview deve usar JavaScript ES5 puro (sem arrow functions ou const/let dentro de loops)
    - NÃO usar regex com backticks no JavaScript embutido (causa erro de sintaxe)
    - Comunicação via `vscode.postMessage()` e `webview.onDidReceiveMessage()`
+   - Propriedades para cache do workspace:
+     - `workspaceContext: string` - contexto carregado
+     - `workspaceContextLoaded: boolean` - flag de cache
+   - Listas de extensões suportadas e pastas ignoradas
+   - Método `scanWorkspaceRecursive()` para escanear arquivos
+   - Método `loadWorkspaceContext()` para carregar contexto
+   - Método `needsWorkspaceContext()` para detectar se precisa carregar
+   - Método `invalidateWorkspaceContext()` público para invalidar cache
 
-3. **System Prompt para o modelo:**
+3. **Extension (`extension.ts`):**
+   - Criar FileSystemWatcher para invalidar cache quando arquivos mudam:
+     ```typescript
+     const watcher = vscode.workspace.createFileSystemWatcher('**/*');
+     watcher.onDidChange(() => provider.invalidateWorkspaceContext());
+     watcher.onDidCreate(() => provider.invalidateWorkspaceContext());
+     watcher.onDidDelete(() => provider.invalidateWorkspaceContext());
+     ```
+
+4. **System Prompt para o modelo:**
    ```
    Você é um assistente de programação. Você pode:
    1. CRIAR ARQUIVOS com: [CRIAR_ARQUIVO:path]conteúdo[/CRIAR_ARQUIVO]
    2. EXECUTAR COMANDOS com: [EXECUTAR_COMANDO]comando[/EXECUTAR_COMANDO]
+   3. LER ARQUIVOS com: [LER_ARQUIVO:path][/LER_ARQUIVO]
+   4. LISTAR DIRETÓRIOS com: [LISTAR_DIRETORIO:path][/LISTAR_DIRETORIO]
+   5. DELETAR ARQUIVOS com: [DELETAR_ARQUIVO:path][/DELETAR_ARQUIVO]
+   
+   Quando o contexto do workspace for fornecido, use-o para tomar decisões informadas sobre o código.
    ```
 
-4. **Fluxo de Inicialização:**
+5. **Fluxo de Inicialização:**
    - Quando o webview carrega, enviar `postMessage({ command: 'testConnection' })`
    - Enviar `postMessage({ command: 'listModels' })`
    - Backend processa e responde com `webview.postMessage({ command: 'connectionStatus', connected: true/false })`
    - Backend responde com `webview.postMessage({ command: 'modelsList', models: [...], currentModel: '...' })`
+
+6. **Fluxo de Análise do Workspace:**
+   - Usuário envia mensagem com palavras-chave (analise, código, projeto, etc.)
+   - Sistema detecta necessidade de contexto via `needsWorkspaceContext()`
+   - Envia `webview.postMessage({ command: 'thinking', text: '🧠 Pensando...' })`
+   - Carrega contexto via `getWorkspaceContext()` (usa cache se disponível)
+   - Envia `webview.postMessage({ command: 'thinkingComplete' })`
+   - Adiciona contexto ao system prompt
+   - Continua fluxo normal de chat
 
 ### API do Ollama - Referência:
 
