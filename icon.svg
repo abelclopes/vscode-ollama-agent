@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background -->
+  <rect width="128" height="128" rx="16" fill="#1e1e1e"/>
+  
+  <!-- Llama silhouette -->
+  <ellipse cx="64" cy="75" rx="28" ry="22" fill="#4a9eff"/>
+  <ellipse cx="64" cy="58" rx="18" ry="16" fill="#4a9eff"/>
+  
+  <!-- Ears -->
+  <ellipse cx="50" cy="42" rx="6" ry="12" fill="#4a9eff" transform="rotate(-15 50 42)"/>
+  <ellipse cx="78" cy="42" rx="6" ry="12" fill="#4a9eff" transform="rotate(15 78 42)"/>
+  
+  <!-- Inner ears -->
+  <ellipse cx="50" cy="43" rx="3" ry="7" fill="#3a7ed0" transform="rotate(-15 50 43)"/>
+  <ellipse cx="78" cy="43" rx="3" ry="7" fill="#3a7ed0" transform="rotate(15 78 43)"/>
+  
+  <!-- Eyes -->
+  <circle cx="56" cy="55" r="4" fill="#1e1e1e"/>
+  <circle cx="72" cy="55" r="4" fill="#1e1e1e"/>
+  <circle cx="57" cy="54" r="1.5" fill="white"/>
+  <circle cx="73" cy="54" r="1.5" fill="white"/>
+  
+  <!-- Nose/Mouth -->
+  <ellipse cx="64" cy="66" rx="8" ry="5" fill="#3a7ed0"/>
+  <circle cx="62" cy="65" r="1.5" fill="#1e1e1e"/>
+  <circle cx="66" cy="65" r="1.5" fill="#1e1e1e"/>
+  
+  <!-- Legs -->
+  <rect x="44" y="90" width="6" height="16" rx="3" fill="#4a9eff"/>
+  <rect x="56" y="90" width="6" height="14" rx="3" fill="#4a9eff"/>
+  <rect x="66" y="90" width="6" height="14" rx="3" fill="#4a9eff"/>
+  <rect x="78" y="90" width="6" height="16" rx="3" fill="#4a9eff"/>
+  
+  <!-- Chat bubble -->
+  <path d="M95 20 L110 20 Q118 20 118 28 L118 42 Q118 50 110 50 L100 50 L95 58 L95 50 L88 50 Q80 50 80 42 L80 28 Q80 20 88 20 Z" fill="#4CAF50"/>
+  
+  <!-- Chat dots -->
+  <circle cx="89" cy="35" r="3" fill="white"/>
+  <circle cx="99" cy="35" r="3" fill="white"/>
+  <circle cx="109" cy="35" r="3" fill="white"/>
+</svg>

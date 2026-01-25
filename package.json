@@ -1,14 +1,29 @@
 {
   "name": "vscode-ollama-agent",
   "displayName": "Ollama Chat Agent",
-  "description": "Chat com modelos Ollama na sua rede local",
-  "version": "0.0.1",
+  "description": "Chat com modelos Ollama na sua rede local - Agente de código com capacidade de criar, ler e deletar arquivos",
+  "version": "0.1.0",
+  "publisher": "abellopes",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abellopes/vscode-ollama-agent"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "AI",
-    "Chat"
+    "Chat",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "ollama",
+    "ai",
+    "chat",
+    "llama",
+    "code assistant",
+    "agent"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -50,7 +65,9 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^20.x",
