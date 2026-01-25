@@ -203,6 +203,56 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    private cleanMarkdownFromContent(content: string): string {
+        // Remove blocos de código markdown (```language ... ```)
+        let cleaned = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '');
+        // Remove espaços extras no início e fim
+        cleaned = cleaned.trim();
+        return cleaned;
+    }
+
+    private async processAgentActions(message: string) {
+        // Regex mais flexível para capturar o padrão mesmo com markdown misturado
+        const fileRegex = /\[CRIAR_ARQUIVO:([^\]]+)\]([\s\S]*?)\[\/CRIAR_ARQUIVO\]/g;
+        const cmdRegex = /\[EXECUTAR_COMANDO\]([\s\S]*?)\[\/EXECUTAR_COMANDO\]/g;
+        const readRegex = /\[LER_ARQUIVO:([^\]]+)\]\[\/LER_ARQUIVO\]/g;
+        const listRegex = /\[LISTAR_DIRETORIO:([^\]]*)\]\[\/LISTAR_DIRETORIO\]/g;
+
+        let match;
+
+        // Processa criação de arquivos automaticamente
+        while ((match = fileRegex.exec(message)) !== null) {
+            const filePath = match[1].trim();
+            let content = match[2];
+            // Limpa markdown do conteúdo
+            content = this.cleanMarkdownFromContent(content);
+            
+            console.log('[Agent] Criando arquivo:', filePath);
+            await this.createFile(filePath, content);
+        }
+
+        // Processa comandos de terminal automaticamente
+        while ((match = cmdRegex.exec(message)) !== null) {
+            const cmd = match[1].trim();
+            console.log('[Agent] Executando comando:', cmd);
+            await this.runTerminalCommand(cmd);
+        }
+
+        // Processa leitura de arquivos
+        while ((match = readRegex.exec(message)) !== null) {
+            const filePath = match[1].trim();
+            console.log('[Agent] Lendo arquivo:', filePath);
+            await this.readFile(filePath);
+        }
+
+        // Processa listagem de diretórios
+        while ((match = listRegex.exec(message)) !== null) {
+            const dirPath = match[1].trim();
+            console.log('[Agent] Listando diretório:', dirPath);
+            await this.listDirectory(dirPath);
+        }
+    }
+
     private async runTerminalCommand(command: string) {
         try {
             if (!this.terminal || this.terminal.exitStatus !== undefined) {
@@ -297,7 +347,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         if (this.messages.length === 0) {
             this.messages.push({
                 role: 'system',
-                content: 'Você é um assistente de programação avançado com acesso ao workspace do usuário. Você pode:\n\n1. CRIAR ARQUIVOS com: [CRIAR_ARQUIVO:caminho/arquivo.ext]conteúdo do arquivo[/CRIAR_ARQUIVO]\n\n2. EXECUTAR COMANDOS no terminal com: [EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n3. LER ARQUIVOS com: [LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n4. LISTAR DIRETÓRIOS com: [LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO] (use caminho vazio para raiz)\n\nSempre que precisar entender o código existente, use LER_ARQUIVO. Para explorar a estrutura do projeto, use LISTAR_DIRETORIO. Seja proativo em explorar o workspace quando necessário.'
+                content: 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
             });
         }
 
@@ -317,6 +367,10 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
             });
 
             this.messages.push({ role: 'assistant', content: assistantMessage });
+            
+            // Processa ações automaticamente
+            await this.processAgentActions(assistantMessage);
+            
             this.view?.webview.postMessage({ command: 'assistantComplete' });
 
         } catch (error) {
@@ -690,7 +744,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '\n' +
 '            function completeMessage() {\n' +
 '                if (currentAssistantContent) {\n' +
-'                    processActions(currentAssistantContent);\n' +
+'                    cleanAndFormatMessage(currentAssistantContent);\n' +
 '                }\n' +
 '                currentAssistantContent = null;\n' +
 '                isProcessing = false;\n' +
@@ -698,121 +752,15 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                messageInput.focus();\n' +
 '            }\n' +
 '\n' +
-'            function processActions(element) {\n' +
+'            function cleanAndFormatMessage(element) {\n' +
 '                var content = element.textContent;\n' +
-'                var files = [];\n' +
-'                var commands = [];\n' +
-'                var readFiles = [];\n' +
-'                var listDirs = [];\n' +
-'                \n' +
-'                var fileRegex = /\\[CRIAR_ARQUIVO:([^\\]]+)\\]([\\s\\S]*?)\\[\\/CRIAR_ARQUIVO\\]/g;\n' +
-'                var match;\n' +
-'                while ((match = fileRegex.exec(content)) !== null) {\n' +
-'                    files.push({ path: match[1].trim(), content: match[2].trim() });\n' +
-'                }\n' +
-'\n' +
-'                var cmdRegex = /\\[EXECUTAR_COMANDO\\]([\\s\\S]*?)\\[\\/EXECUTAR_COMANDO\\]/g;\n' +
-'                while ((match = cmdRegex.exec(content)) !== null) {\n' +
-'                    commands.push(match[1].trim());\n' +
-'                }\n' +
-'\n' +
-'                var readRegex = /\\[LER_ARQUIVO:([^\\]]+)\\]\\[\\/LER_ARQUIVO\\]/g;\n' +
-'                while ((match = readRegex.exec(content)) !== null) {\n' +
-'                    readFiles.push(match[1].trim());\n' +
-'                }\n' +
-'\n' +
-'                var listRegex = /\\[LISTAR_DIRETORIO:([^\\]]*)\\]\\[\\/LISTAR_DIRETORIO\\]/g;\n' +
-'                while ((match = listRegex.exec(content)) !== null) {\n' +
-'                    listDirs.push(match[1].trim());\n' +
-'                }\n' +
-'\n' +
-'                var hasActions = files.length > 0 || commands.length > 0 || readFiles.length > 0 || listDirs.length > 0;\n' +
-'\n' +
-'                if (hasActions) {\n' +
-'                    var html = escapeHtml(content);\n' +
-'                    \n' +
-'                    for (var i = 0; i < files.length; i++) {\n' +
-'                        var file = files[i];\n' +
-'                        var fileMarker = escapeHtml("[CRIAR_ARQUIVO:" + file.path + "]" + file.content + "[/CRIAR_ARQUIVO]");\n' +
-'                        var fileBtn = \'<div style="margin:8px 0;padding:8px;background:var(--vscode-textBlockQuote-background);border-radius:4px;">\' +\n' +
-'                            \'<strong>📄 \' + escapeHtml(file.path) + \'</strong><br>\' +\n' +
-'                            \'<button class="action-btn file-btn" data-idx="\' + i + \'">➕ Criar arquivo</button></div>\';\n' +
-'                        html = html.replace(fileMarker, fileBtn);\n' +
-'                    }\n' +
-'\n' +
-'                    for (var j = 0; j < commands.length; j++) {\n' +
-'                        var cmd = commands[j];\n' +
-'                        var cmdMarker = escapeHtml("[EXECUTAR_COMANDO]" + cmd + "[/EXECUTAR_COMANDO]");\n' +
-'                        var cmdBtn = \'<div style="margin:8px 0;padding:8px;background:var(--vscode-textBlockQuote-background);border-radius:4px;">\' +\n' +
-'                            \'<strong>⚡ Comando:</strong> <code>\' + escapeHtml(cmd) + \'</code><br>\' +\n' +
-'                            \'<button class="action-btn cmd-btn" data-idx="\' + j + \'">▶️ Executar</button></div>\';\n' +
-'                        html = html.replace(cmdMarker, cmdBtn);\n' +
-'                    }\n' +
-'\n' +
-'                    for (var r = 0; r < readFiles.length; r++) {\n' +
-'                        var readPath = readFiles[r];\n' +
-'                        var readMarker = escapeHtml("[LER_ARQUIVO:" + readPath + "][/LER_ARQUIVO]");\n' +
-'                        var readBtn = \'<div style="margin:8px 0;padding:8px;background:var(--vscode-textBlockQuote-background);border-radius:4px;">\' +\n' +
-'                            \'<strong>👁️ Ler arquivo:</strong> \' + escapeHtml(readPath) + \'<br>\' +\n' +
-'                            \'<button class="action-btn read-btn" data-idx="\' + r + \'">📖 Ler</button></div>\';\n' +
-'                        html = html.replace(readMarker, readBtn);\n' +
-'                    }\n' +
-'\n' +
-'                    for (var d = 0; d < listDirs.length; d++) {\n' +
-'                        var dirPath = listDirs[d];\n' +
-'                        var dirMarker = escapeHtml("[LISTAR_DIRETORIO:" + dirPath + "][/LISTAR_DIRETORIO]");\n' +
-'                        var dirBtn = \'<div style="margin:8px 0;padding:8px;background:var(--vscode-textBlockQuote-background);border-radius:4px;">\' +\n' +
-'                            \'<strong>📂 Listar diretório:</strong> \' + escapeHtml(dirPath || \'/\') + \'<br>\' +\n' +
-'                            \'<button class="action-btn list-btn" data-idx="\' + d + \'">📁 Listar</button></div>\';\n' +
-'                        html = html.replace(dirMarker, dirBtn);\n' +
-'                    }\n' +
-'\n' +
-'                    element.innerHTML = html;\n' +
-'\n' +
-'                    var fileBtns = element.querySelectorAll(".file-btn");\n' +
-'                    for (var k = 0; k < fileBtns.length; k++) {\n' +
-'                        (function(btn, idx) {\n' +
-'                            btn.addEventListener("click", function() {\n' +
-'                                btn.disabled = true;\n' +
-'                                btn.textContent = "⏳ Criando...";\n' +
-'                                vscode.postMessage({ command: "createFile", path: files[idx].path, content: files[idx].content });\n' +
-'                            });\n' +
-'                        })(fileBtns[k], parseInt(fileBtns[k].getAttribute("data-idx")));\n' +
-'                    }\n' +
-'\n' +
-'                    var cmdBtns = element.querySelectorAll(".cmd-btn");\n' +
-'                    for (var l = 0; l < cmdBtns.length; l++) {\n' +
-'                        (function(btn, idx) {\n' +
-'                            btn.addEventListener("click", function() {\n' +
-'                                btn.disabled = true;\n' +
-'                                btn.textContent = "⏳ Executando...";\n' +
-'                                vscode.postMessage({ command: "runCommand", cmd: commands[idx] });\n' +
-'                            });\n' +
-'                        })(cmdBtns[l], parseInt(cmdBtns[l].getAttribute("data-idx")));\n' +
-'                    }\n' +
-'\n' +
-'                    var readBtns = element.querySelectorAll(".read-btn");\n' +
-'                    for (var m = 0; m < readBtns.length; m++) {\n' +
-'                        (function(btn, idx) {\n' +
-'                            btn.addEventListener("click", function() {\n' +
-'                                btn.disabled = true;\n' +
-'                                btn.textContent = "⏳ Lendo...";\n' +
-'                                vscode.postMessage({ command: "readFile", path: readFiles[idx] });\n' +
-'                            });\n' +
-'                        })(readBtns[m], parseInt(readBtns[m].getAttribute("data-idx")));\n' +
-'                    }\n' +
-'\n' +
-'                    var listBtns = element.querySelectorAll(".list-btn");\n' +
-'                    for (var n = 0; n < listBtns.length; n++) {\n' +
-'                        (function(btn, idx) {\n' +
-'                            btn.addEventListener("click", function() {\n' +
-'                                btn.disabled = true;\n' +
-'                                btn.textContent = "⏳ Listando...";\n' +
-'                                vscode.postMessage({ command: "listDir", path: listDirs[idx] });\n' +
-'                            });\n' +
-'                        })(listBtns[n], parseInt(listBtns[n].getAttribute("data-idx")));\n' +
-'                    }\n' +
-'                }\n' +
+'                var html = escapeHtml(content);\n' +
+'                html = html.replace(/\\\\[CRIAR_ARQUIVO:[^\\\\]]+\\\\][\\\\s\\\\S]*?\\\\[\\\\/CRIAR_ARQUIVO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(0,200,0,0.1);border-left:3px solid #4CAF50;border-radius:4px;">✅ <strong>Arquivo criado!</strong></div>\');\n' +
+'                html = html.replace(/\\\\[EXECUTAR_COMANDO\\\\][\\\\s\\\\S]*?\\\\[\\\\/EXECUTAR_COMANDO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(0,150,255,0.1);border-left:3px solid #2196F3;border-radius:4px;">⚡ <strong>Comando executado!</strong></div>\');\n' +
+'                html = html.replace(/\\\\[LER_ARQUIVO:[^\\\\]]+\\\\]\\\\[\\\\/LER_ARQUIVO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(255,200,0,0.1);border-left:3px solid #FF9800;border-radius:4px;">📖 <strong>Arquivo lido</strong></div>\');\n' +
+'                html = html.replace(/\\\\[LISTAR_DIRETORIO:[^\\\\]]*\\\\]\\\\[\\\\/LISTAR_DIRETORIO\\\\]/g, \'<div style="margin:8px 0;padding:8px;background:rgba(150,0,255,0.1);border-left:3px solid #9C27B0;border-radius:4px;">📂 <strong>Diretório listado</strong></div>\');\n' +
+'                html = html.replace(/```[\\\\w]*[\\\\s\\\\S]*?```/g, \'\');\n' +
+'                element.innerHTML = html;\n' +
 '            }\n' +
 '\n' +
 '            function escapeHtml(text) {\n' +
