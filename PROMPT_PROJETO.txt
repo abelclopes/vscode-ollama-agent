@@ -1,0 +1,175 @@
+## Prompt para Gerar Extensão VS Code - Ollama Chat Agent
+
+Crie uma extensão para Visual Studio Code que funcione como um agente de IA conectado a um servidor Ollama local. A extensão deve ter uma interface de chat na barra lateral e ser capaz de criar arquivos e executar comandos no terminal.
+
+### Requisitos Técnicos:
+
+**Stack:**
+- TypeScript
+- VS Code Extension API
+- Node.js módulo `http` nativo (NÃO usar axios)
+- Webview para interface do chat
+
+**Estrutura do Projeto:**
+```
+vscode-ollama-agent/
+├── package.json
+├── tsconfig.json
+├── src/
+│   ├── extension.ts      # Ponto de entrada
+│   ├── ollamaClient.ts   # Cliente HTTP para API do Ollama
+│   └── chatProvider.ts   # WebviewViewProvider para o chat
+```
+
+### Funcionalidades Obrigatórias:
+
+1. **Conexão com Servidor Ollama:**
+   - Conectar a um servidor Ollama via HTTP (exemplo: `http://192.168.1.86:11434`)
+   - Endpoint para listar modelos: `GET /api/tags`
+   - Endpoint para chat com streaming: `POST /api/chat` com `stream: true`
+   - Configurações salvas via `vscode.workspace.getConfiguration`
+
+2. **Interface do Chat (Webview):**
+   - Exibir status de conexão (conectado/desconectado) com indicador visual
+   - Dropdown para selecionar modelo disponível
+   - Botão de configurações para alterar URL do servidor
+   - Botão de reconectar
+   - Área de mensagens com suporte a streaming (exibir resposta caractere por caractere)
+   - Input de texto com envio por Enter ou botão
+   - Botão para limpar histórico
+
+3. **Capacidades do Agente:**
+   - Criar arquivos no workspace quando a IA responder com formato especial:
+     ```
+     [CRIAR_ARQUIVO:caminho/arquivo.ext]
+     conteúdo do arquivo
+     [/CRIAR_ARQUIVO]
+     ```
+   - Executar comandos no terminal quando a IA responder com formato especial:
+     ```
+     [EXECUTAR_COMANDO]
+     npm install express
+     [/EXECUTAR_COMANDO]
+     ```
+   - Exibir botões clicáveis para confirmar criação de arquivo ou execução de comando
+
+4. **Configurações (contributes.configuration):**
+   - `ollamaAgent.serverUrl`: URL do servidor (default: "http://192.168.1.86:11434")
+   - `ollamaAgent.model`: Modelo padrão (default: "qwen2.5-coder:latest")
+   - `ollamaAgent.temperature`: Temperatura (default: 0.7)
+
+### package.json:
+
+```json
+{
+  "name": "vscode-ollama-agent",
+  "displayName": "Ollama Chat Agent",
+  "description": "Chat com modelos Ollama na sua rede local",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["AI", "Chat"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [{
+        "id": "ollama-sidebar",
+        "title": "Ollama Chat",
+        "icon": "$(comment-discussion)"
+      }]
+    },
+    "views": {
+      "ollama-sidebar": [{
+        "type": "webview",
+        "id": "ollamaChat",
+        "name": "Chat"
+      }]
+    },
+    "configuration": {
+      "title": "Ollama Agent",
+      "properties": {
+        "ollamaAgent.serverUrl": {
+          "type": "string",
+          "default": "http://192.168.1.86:11434"
+        },
+        "ollamaAgent.model": {
+          "type": "string",
+          "default": "qwen2.5-coder:latest"
+        },
+        "ollamaAgent.temperature": {
+          "type": "number",
+          "default": 0.7
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
+```
+
+### Pontos Críticos de Implementação:
+
+1. **OllamaClient (`ollamaClient.ts`):**
+   - Usar `new URL()` para parsear a URL do servidor
+   - Extrair porta com: `const port = url.port ? parseInt(url.port, 10) : 11434`
+   - Método `testConnection()` retorna boolean
+   - Método `listModels()` retorna `string[]` com nomes dos modelos
+   - Método `chat(messages, onChunk)` onde `onChunk` é callback para streaming
+
+2. **ChatProvider (`chatProvider.ts`):**
+   - Implementar `WebviewViewProvider`
+   - Registrar com `retainContextWhenHidden: true`
+   - O HTML do webview deve usar JavaScript ES5 puro (sem arrow functions ou const/let dentro de loops)
+   - NÃO usar regex com backticks no JavaScript embutido (causa erro de sintaxe)
+   - Comunicação via `vscode.postMessage()` e `webview.onDidReceiveMessage()`
+
+3. **System Prompt para o modelo:**
+   ```
+   Você é um assistente de programação. Você pode:
+   1. CRIAR ARQUIVOS com: [CRIAR_ARQUIVO:path]conteúdo[/CRIAR_ARQUIVO]
+   2. EXECUTAR COMANDOS com: [EXECUTAR_COMANDO]comando[/EXECUTAR_COMANDO]
+   ```
+
+4. **Fluxo de Inicialização:**
+   - Quando o webview carrega, enviar `postMessage({ command: 'testConnection' })`
+   - Enviar `postMessage({ command: 'listModels' })`
+   - Backend processa e responde com `webview.postMessage({ command: 'connectionStatus', connected: true/false })`
+   - Backend responde com `webview.postMessage({ command: 'modelsList', models: [...], currentModel: '...' })`
+
+### API do Ollama - Referência:
+
+**Listar modelos:**
+```
+GET http://host:11434/api/tags
+Response: { "models": [{ "name": "modelo:tag", ... }] }
+```
+
+**Chat com streaming:**
+```
+POST http://host:11434/api/chat
+Body: {
+  "model": "qwen2.5-coder:latest",
+  "messages": [
+    { "role": "system", "content": "..." },
+    { "role": "user", "content": "..." }
+  ],
+  "stream": true,
+  "options": { "temperature": 0.7 },
+  "keep_alive": "5m"
+}
+Response (streaming, uma linha JSON por chunk):
+{"message":{"content":"H"},"done":false}
+{"message":{"content":"i"},"done":false}
+{"done":true}
+```
+
+---
+
+**Gere todos os arquivos completos e funcionais. O código deve compilar sem erros e a extensão deve funcionar ao pressionar F5 no VS Code.**
