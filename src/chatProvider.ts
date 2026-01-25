@@ -57,6 +57,12 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
                     case 'runCommand':
                         await this.runTerminalCommand(message.cmd);
                         break;
+                    case 'readFile':
+                        await this.readFile(message.path);
+                        break;
+                    case 'listDir':
+                        await this.listDirectory(message.path);
+                        break;
                     default:
                         console.warn('[ChatProvider] Comando desconhecido:', message.command);
                 }
@@ -214,6 +220,75 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    private async readFile(filePath: string) {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('Nenhum workspace aberto');
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri;
+            const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+            const contentBytes = await vscode.workspace.fs.readFile(fileUri);
+            const content = Buffer.from(contentBytes).toString('utf8');
+
+            // Adiciona o conteúdo do arquivo ao contexto e envia para o chat
+            const fileInfo = '📄 Conteúdo de ' + filePath + ':\n```\n' + content + '\n```';
+            this.messages.push({ role: 'user', content: '[Arquivo lido: ' + filePath + ']\n' + content });
+            
+            this.view?.webview.postMessage({
+                command: 'fileRead',
+                path: filePath,
+                content: fileInfo,
+                success: true
+            });
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao ler arquivo:', error);
+            this.view?.webview.postMessage({
+                command: 'fileRead',
+                path: filePath,
+                content: 'Erro ao ler arquivo: ' + (error instanceof Error ? error.message : String(error)),
+                success: false
+            });
+        }
+    }
+
+    private async listDirectory(dirPath: string) {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('Nenhum workspace aberto');
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri;
+            const targetPath = dirPath ? vscode.Uri.joinPath(workspaceRoot, dirPath) : workspaceRoot;
+            const entries = await vscode.workspace.fs.readDirectory(targetPath);
+
+            const fileList = entries.map(([name, type]) => {
+                const icon = type === vscode.FileType.Directory ? '📁' : '📄';
+                return icon + ' ' + name;
+            }).join('\n');
+
+            const listInfo = '📂 Conteúdo de ' + (dirPath || '/') + ':\n' + fileList;
+            this.messages.push({ role: 'user', content: '[Listagem de diretório: ' + (dirPath || '/') + ']\n' + fileList });
+
+            this.view?.webview.postMessage({
+                command: 'dirListed',
+                path: dirPath || '/',
+                content: listInfo,
+                success: true
+            });
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao listar diretório:', error);
+            this.view?.webview.postMessage({
+                command: 'dirListed',
+                path: dirPath,
+                content: 'Erro ao listar diretório: ' + (error instanceof Error ? error.message : String(error)),
+                success: false
+            });
+        }
+    }
+
     private async handleUserMessage(text: string) {
         if (!text.trim()) return;
 
@@ -222,7 +297,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         if (this.messages.length === 0) {
             this.messages.push({
                 role: 'system',
-                content: 'Você é um assistente de programação. Você pode:\n1. CRIAR ARQUIVOS com: [CRIAR_ARQUIVO:path]conteúdo[/CRIAR_ARQUIVO]\n2. EXECUTAR COMANDOS com: [EXECUTAR_COMANDO]comando[/EXECUTAR_COMANDO]'
+                content: 'Você é um assistente de programação avançado com acesso ao workspace do usuário. Você pode:\n\n1. CRIAR ARQUIVOS com: [CRIAR_ARQUIVO:caminho/arquivo.ext]conteúdo do arquivo[/CRIAR_ARQUIVO]\n\n2. EXECUTAR COMANDOS no terminal com: [EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n3. LER ARQUIVOS com: [LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n4. LISTAR DIRETÓRIOS com: [LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO] (use caminho vazio para raiz)\n\nSempre que precisar entender o código existente, use LER_ARQUIVO. Para explorar a estrutura do projeto, use LISTAR_DIRETORIO. Seja proativo em explorar o workspace quando necessário.'
             });
         }
 
@@ -587,8 +662,16 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                chatContainer.appendChild(div);\n' +
 '                chatContainer.scrollTop = chatContainer.scrollHeight;\n' +
 '            }\n' +
-'\n' +
-'            function startAssistantMessage() {\n' +
+'\n' +'            function addSystemMessage(text) {\n' +
+'                removeEmptyState();\n' +
+'                var div = document.createElement("div");\n' +
+'                div.className = "message assistant";\n' +
+'                div.innerHTML = \'<div class="message-header">📋 Sistema</div><div class="message-content" style="font-family:monospace;font-size:11px;white-space:pre-wrap;"></div>\';\n' +
+'                div.querySelector(".message-content").textContent = text;\n' +
+'                chatContainer.appendChild(div);\n' +
+'                chatContainer.scrollTop = chatContainer.scrollHeight;\n' +
+'            }\n' +
+'\n' +'            function startAssistantMessage() {\n' +
 '                removeEmptyState();\n' +
 '                var div = document.createElement("div");\n' +
 '                div.className = "message assistant";\n' +
@@ -619,6 +702,8 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                var content = element.textContent;\n' +
 '                var files = [];\n' +
 '                var commands = [];\n' +
+'                var readFiles = [];\n' +
+'                var listDirs = [];\n' +
 '                \n' +
 '                var fileRegex = /\\[CRIAR_ARQUIVO:([^\\]]+)\\]([\\s\\S]*?)\\[\\/CRIAR_ARQUIVO\\]/g;\n' +
 '                var match;\n' +
@@ -631,7 +716,19 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                    commands.push(match[1].trim());\n' +
 '                }\n' +
 '\n' +
-'                if (files.length > 0 || commands.length > 0) {\n' +
+'                var readRegex = /\\[LER_ARQUIVO:([^\\]]+)\\]\\[\\/LER_ARQUIVO\\]/g;\n' +
+'                while ((match = readRegex.exec(content)) !== null) {\n' +
+'                    readFiles.push(match[1].trim());\n' +
+'                }\n' +
+'\n' +
+'                var listRegex = /\\[LISTAR_DIRETORIO:([^\\]]*)\\]\\[\\/LISTAR_DIRETORIO\\]/g;\n' +
+'                while ((match = listRegex.exec(content)) !== null) {\n' +
+'                    listDirs.push(match[1].trim());\n' +
+'                }\n' +
+'\n' +
+'                var hasActions = files.length > 0 || commands.length > 0 || readFiles.length > 0 || listDirs.length > 0;\n' +
+'\n' +
+'                if (hasActions) {\n' +
 '                    var html = escapeHtml(content);\n' +
 '                    \n' +
 '                    for (var i = 0; i < files.length; i++) {\n' +
@@ -650,6 +747,24 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                            \'<strong>⚡ Comando:</strong> <code>\' + escapeHtml(cmd) + \'</code><br>\' +\n' +
 '                            \'<button class="action-btn cmd-btn" data-idx="\' + j + \'">▶️ Executar</button></div>\';\n' +
 '                        html = html.replace(cmdMarker, cmdBtn);\n' +
+'                    }\n' +
+'\n' +
+'                    for (var r = 0; r < readFiles.length; r++) {\n' +
+'                        var readPath = readFiles[r];\n' +
+'                        var readMarker = escapeHtml("[LER_ARQUIVO:" + readPath + "][/LER_ARQUIVO]");\n' +
+'                        var readBtn = \'<div style="margin:8px 0;padding:8px;background:var(--vscode-textBlockQuote-background);border-radius:4px;">\' +\n' +
+'                            \'<strong>👁️ Ler arquivo:</strong> \' + escapeHtml(readPath) + \'<br>\' +\n' +
+'                            \'<button class="action-btn read-btn" data-idx="\' + r + \'">📖 Ler</button></div>\';\n' +
+'                        html = html.replace(readMarker, readBtn);\n' +
+'                    }\n' +
+'\n' +
+'                    for (var d = 0; d < listDirs.length; d++) {\n' +
+'                        var dirPath = listDirs[d];\n' +
+'                        var dirMarker = escapeHtml("[LISTAR_DIRETORIO:" + dirPath + "][/LISTAR_DIRETORIO]");\n' +
+'                        var dirBtn = \'<div style="margin:8px 0;padding:8px;background:var(--vscode-textBlockQuote-background);border-radius:4px;">\' +\n' +
+'                            \'<strong>📂 Listar diretório:</strong> \' + escapeHtml(dirPath || \'/\') + \'<br>\' +\n' +
+'                            \'<button class="action-btn list-btn" data-idx="\' + d + \'">📁 Listar</button></div>\';\n' +
+'                        html = html.replace(dirMarker, dirBtn);\n' +
 '                    }\n' +
 '\n' +
 '                    element.innerHTML = html;\n' +
@@ -674,6 +789,28 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                                vscode.postMessage({ command: "runCommand", cmd: commands[idx] });\n' +
 '                            });\n' +
 '                        })(cmdBtns[l], parseInt(cmdBtns[l].getAttribute("data-idx")));\n' +
+'                    }\n' +
+'\n' +
+'                    var readBtns = element.querySelectorAll(".read-btn");\n' +
+'                    for (var m = 0; m < readBtns.length; m++) {\n' +
+'                        (function(btn, idx) {\n' +
+'                            btn.addEventListener("click", function() {\n' +
+'                                btn.disabled = true;\n' +
+'                                btn.textContent = "⏳ Lendo...";\n' +
+'                                vscode.postMessage({ command: "readFile", path: readFiles[idx] });\n' +
+'                            });\n' +
+'                        })(readBtns[m], parseInt(readBtns[m].getAttribute("data-idx")));\n' +
+'                    }\n' +
+'\n' +
+'                    var listBtns = element.querySelectorAll(".list-btn");\n' +
+'                    for (var n = 0; n < listBtns.length; n++) {\n' +
+'                        (function(btn, idx) {\n' +
+'                            btn.addEventListener("click", function() {\n' +
+'                                btn.disabled = true;\n' +
+'                                btn.textContent = "⏳ Listando...";\n' +
+'                                vscode.postMessage({ command: "listDir", path: listDirs[idx] });\n' +
+'                            });\n' +
+'                        })(listBtns[n], parseInt(listBtns[n].getAttribute("data-idx")));\n' +
 '                    }\n' +
 '                }\n' +
 '            }\n' +
@@ -751,6 +888,28 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                            if (cmdBtns[i].disabled) {\n' +
 '                                cmdBtns[i].textContent = msg.success ? "✅ Executado!" : "❌ Erro";\n' +
 '                            }\n' +
+'                        }\n' +
+'                        break;\n' +
+'                    case "fileRead":\n' +
+'                        var readBtns = document.querySelectorAll(".read-btn");\n' +
+'                        for (var i = 0; i < readBtns.length; i++) {\n' +
+'                            if (readBtns[i].disabled) {\n' +
+'                                readBtns[i].textContent = msg.success ? "✅ Lido!" : "❌ Erro";\n' +
+'                            }\n' +
+'                        }\n' +
+'                        if (msg.success) {\n' +
+'                            addSystemMessage(msg.content);\n' +
+'                        }\n' +
+'                        break;\n' +
+'                    case "dirListed":\n' +
+'                        var listBtns = document.querySelectorAll(".list-btn");\n' +
+'                        for (var i = 0; i < listBtns.length; i++) {\n' +
+'                            if (listBtns[i].disabled) {\n' +
+'                                listBtns[i].textContent = msg.success ? "✅ Listado!" : "❌ Erro";\n' +
+'                            }\n' +
+'                        }\n' +
+'                        if (msg.success) {\n' +
+'                            addSystemMessage(msg.content);\n' +
 '                        }\n' +
 '                        break;\n' +
 '                }\n' +
