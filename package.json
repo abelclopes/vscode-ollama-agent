@@ -2,7 +2,7 @@
   "name": "vscode-ollama-agent",
   "displayName": "Ollama Chat Agent",
   "description": "Chat com modelos Ollama na sua rede local - Agente de código com capacidade de criar, ler e deletar arquivos",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "abellopes",
   "icon": "icon.png",
   "repository": {

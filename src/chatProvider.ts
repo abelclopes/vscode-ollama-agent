@@ -6,6 +6,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
     private ollamaClient: OllamaClient;
     private messages: OllamaMessage[] = [];
     private terminal?: vscode.Terminal;
+    private agentMode: boolean = true;
 
     constructor(private context: vscode.ExtensionContext) {
         this.ollamaClient = new OllamaClient();
@@ -65,6 +66,11 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
                         break;
                     case 'listDir':
                         await this.listDirectory(message.path);
+                        break;
+                    case 'setMode':
+                        this.agentMode = message.agentMode;
+                        this.messages = []; // Limpa histórico ao trocar de modo
+                        console.log('[ChatProvider] Modo alterado para:', this.agentMode ? 'Agente' : 'Chat');
                         break;
                     default:
                         console.warn('[ChatProvider] Comando desconhecido:', message.command);
@@ -393,9 +399,13 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         console.log('[ChatProvider] Processando mensagem:', text.substring(0, 50));
 
         if (this.messages.length === 0) {
+            const systemPrompt = this.agentMode 
+                ? 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n### Deletar arquivo:\n[DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n5. CUIDADO ao deletar arquivos - confirme antes se necessário\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
+                : 'Você é um assistente de programação amigável e prestativo. Responda perguntas sobre código, ajude a explicar conceitos e forneça exemplos quando solicitado. Use blocos de código markdown para mostrar exemplos de código.';
+            
             this.messages.push({
                 role: 'system',
-                content: 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n### Deletar arquivo:\n[DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n5. CUIDADO ao deletar arquivos - confirme antes se necessário\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
+                content: systemPrompt
             });
         }
 
@@ -416,8 +426,10 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 
             this.messages.push({ role: 'assistant', content: assistantMessage });
             
-            // Processa ações automaticamente
-            await this.processAgentActions(assistantMessage);
+            // Processa ações apenas no modo agente
+            if (this.agentMode) {
+                await this.processAgentActions(assistantMessage);
+            }
             
             this.view?.webview.postMessage({ command: 'assistantComplete' });
 
@@ -579,24 +591,122 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            background: var(--vscode-input-background);\n' +
 '            border: 1px solid var(--vscode-input-border);\n' +
 '        }\n' +
+'        .input-wrapper {\n' +
+'            padding: 8px 12px 12px;\n' +
+'        }\n' +
 '        .input-container {\n' +
-'            padding: 8px 12px;\n' +
-'            border-top: 1px solid var(--vscode-panel-border);\n' +
+'            background: var(--vscode-input-background);\n' +
+'            border: 1px solid var(--vscode-input-border);\n' +
+'            border-radius: 8px;\n' +
+'            overflow: hidden;\n' +
+'        }\n' +
+'        .input-container:focus-within {\n' +
+'            border-color: var(--vscode-focusBorder);\n' +
+'        }\n' +
+'        .input-top {\n' +
 '            display: flex;\n' +
-'            gap: 6px;\n' +
+'            align-items: flex-start;\n' +
+'            padding: 8px 10px 4px;\n' +
+'            gap: 8px;\n' +
+'        }\n' +
+'        .input-top .attach-btn {\n' +
+'            background: none;\n' +
+'            border: none;\n' +
+'            color: var(--vscode-foreground);\n' +
+'            opacity: 0.6;\n' +
+'            cursor: pointer;\n' +
+'            padding: 4px;\n' +
+'            font-size: 14px;\n' +
+'        }\n' +
+'        .input-top .attach-btn:hover {\n' +
+'            opacity: 1;\n' +
 '        }\n' +
 '        #messageInput {\n' +
 '            flex: 1;\n' +
-'            padding: 8px 10px;\n' +
-'            background: var(--vscode-input-background);\n' +
+'            background: transparent;\n' +
 '            color: var(--vscode-input-foreground);\n' +
-'            border: 1px solid var(--vscode-input-border);\n' +
-'            border-radius: 4px;\n' +
-'            font-size: 12px;\n' +
+'            border: none;\n' +
+'            outline: none;\n' +
+'            font-size: 13px;\n' +
 '            resize: none;\n' +
-'            min-height: 36px;\n' +
-'            max-height: 100px;\n' +
+'            min-height: 24px;\n' +
+'            max-height: 120px;\n' +
 '            font-family: var(--vscode-font-family);\n' +
+'            line-height: 1.5;\n' +
+'        }\n' +
+'        #messageInput::placeholder {\n' +
+'            color: var(--vscode-input-placeholderForeground);\n' +
+'        }\n' +
+'        .input-bottom {\n' +
+'            display: flex;\n' +
+'            align-items: center;\n' +
+'            justify-content: space-between;\n' +
+'            padding: 6px 10px 8px;\n' +
+'            border-top: 1px solid var(--vscode-panel-border);\n' +
+'            gap: 8px;\n' +
+'        }\n' +
+'        .input-bottom-left {\n' +
+'            display: flex;\n' +
+'            align-items: center;\n' +
+'            gap: 4px;\n' +
+'        }\n' +
+'        .input-bottom-right {\n' +
+'            display: flex;\n' +
+'            align-items: center;\n' +
+'            gap: 6px;\n' +
+'        }\n' +
+'        .mode-dropdown {\n' +
+'            display: flex;\n' +
+'            align-items: center;\n' +
+'            gap: 4px;\n' +
+'            padding: 4px 8px;\n' +
+'            background: transparent;\n' +
+'            border: none;\n' +
+'            color: var(--vscode-foreground);\n' +
+'            font-size: 12px;\n' +
+'            cursor: pointer;\n' +
+'            border-radius: 4px;\n' +
+'        }\n' +
+'        .mode-dropdown:hover {\n' +
+'            background: var(--vscode-toolbar-hoverBackground);\n' +
+'        }\n' +
+'        .mode-dropdown .arrow {\n' +
+'            font-size: 8px;\n' +
+'            opacity: 0.6;\n' +
+'        }\n' +
+'        .icon-btn-sm {\n' +
+'            background: none;\n' +
+'            border: none;\n' +
+'            color: var(--vscode-foreground);\n' +
+'            opacity: 0.6;\n' +
+'            cursor: pointer;\n' +
+'            padding: 4px 6px;\n' +
+'            font-size: 14px;\n' +
+'            border-radius: 4px;\n' +
+'        }\n' +
+'        .icon-btn-sm:hover {\n' +
+'            opacity: 1;\n' +
+'            background: var(--vscode-toolbar-hoverBackground);\n' +
+'        }\n' +
+'        .send-btn {\n' +
+'            background: var(--vscode-button-background);\n' +
+'            border: none;\n' +
+'            color: var(--vscode-button-foreground);\n' +
+'            width: 28px;\n' +
+'            height: 28px;\n' +
+'            border-radius: 6px;\n' +
+'            cursor: pointer;\n' +
+'            display: flex;\n' +
+'            align-items: center;\n' +
+'            justify-content: center;\n' +
+'            font-size: 14px;\n' +
+'        }\n' +
+'        .send-btn:hover {\n' +
+'            background: var(--vscode-button-hoverBackground);\n' +
+'        }\n' +
+'        .send-btn:disabled {\n' +
+'            opacity: 0.4;\n' +
+'            cursor: not-allowed;\n' +
 '        }\n' +
 '        .empty-state {\n' +
 '            flex: 1;\n' +
@@ -631,28 +741,44 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                    <div class="status-dot" id="statusDot"></div>\n' +
 '                    <span id="statusText">Verificando...</span>\n' +
 '                </div>\n' +
-'                <select class="model-select" id="modelSelect">\n' +
-'                    <option value="">Carregando...</option>\n' +
-'                </select>\n' +
 '            </div>\n' +
 '            <div>\n' +
-'                <button class="icon-btn" id="settingsBtn" title="Configurações">⚙️</button>\n' +
 '                <button class="icon-btn" id="reloadBtn" title="Reconectar">🔄</button>\n' +
+'                <button class="icon-btn" id="clearBtn" title="Limpar conversa">🗑️</button>\n' +
 '            </div>\n' +
 '        </div>\n' +
 '    </div>\n' +
 '\n' +
 '    <div class="chat-container" id="chatContainer">\n' +
 '        <div class="empty-state">\n' +
-'            <div class="icon">💬</div>\n' +
-'            <div>Envie uma mensagem para começar</div>\n' +
+'            <div class="icon">🤖</div>\n' +
+'            <div>Descreva o que você quer construir</div>\n' +
 '        </div>\n' +
 '    </div>\n' +
 '\n' +
-'    <div class="input-container">\n' +
-'        <textarea id="messageInput" placeholder="Digite sua mensagem..." rows="1"></textarea>\n' +
-'        <button class="btn" id="sendBtn">Enviar</button>\n' +
-'        <button class="btn" id="clearBtn" style="background: transparent; border: 1px solid var(--vscode-input-border); color: var(--vscode-foreground);">🗑️</button>\n' +
+'    <div class="input-wrapper">\n' +
+'        <div class="input-container">\n' +
+'            <div class="input-top">\n' +
+'                <button class="attach-btn" id="attachBtn" title="Anexar arquivo">📎</button>\n' +
+'                <textarea id="messageInput" placeholder="Descreva o que você quer construir..." rows="1"></textarea>\n' +
+'            </div>\n' +
+'            <div class="input-bottom">\n' +
+'                <div class="input-bottom-left">\n' +
+'                    <button class="mode-dropdown" id="modeBtn">\n' +
+'                        <span id="modeIcon">🤖</span>\n' +
+'                        <span id="modeText">Agente</span>\n' +
+'                        <span class="arrow">▼</span>\n' +
+'                    </button>\n' +
+'                    <select class="model-select" id="modelSelect" style="font-size:11px;padding:2px 4px;max-width:150px;">\n' +
+'                        <option value="">Modelo...</option>\n' +
+'                    </select>\n' +
+'                </div>\n' +
+'                <div class="input-bottom-right">\n' +
+'                    <button class="icon-btn-sm" id="settingsBtn" title="Configurações">⚙️</button>\n' +
+'                    <button class="send-btn" id="sendBtn" title="Enviar">➤</button>\n' +
+'                </div>\n' +
+'            </div>\n' +
+'        </div>\n' +
 '    </div>\n' +
 '\n' +
 '    <script>\n' +
@@ -668,9 +794,15 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            var modelSelect = document.getElementById("modelSelect");\n' +
 '            var statusDot = document.getElementById("statusDot");\n' +
 '            var statusText = document.getElementById("statusText");\n' +
+'            var modeBtn = document.getElementById("modeBtn");\n' +
+'            var modeIcon = document.getElementById("modeIcon");\n' +
+'            var modeText = document.getElementById("modeText");\n' +
+'            var chatLabel = document.getElementById("chatLabel");\n' +
+'            var agentLabel = document.getElementById("agentLabel");\n' +
 '\n' +
 '            var isProcessing = false;\n' +
 '            var currentAssistantContent = null;\n' +
+'            var isAgentMode = true;\n' +
 '\n' +
 '            console.log("[WebView] Inicializado");\n' +
 '            \n' +
@@ -679,6 +811,22 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            \n' +
 '            console.log("[WebView] Solicitando lista de modelos...");\n' +
 '            vscode.postMessage({ command: "listModels" });\n' +
+'\n' +
+'            // Toggle de modo via botão dropdown\n' +
+'            modeBtn.addEventListener("click", function() {\n' +
+'                isAgentMode = !isAgentMode;\n' +
+'                modeIcon.textContent = isAgentMode ? "🤖" : "💬";\n' +
+'                modeText.textContent = isAgentMode ? "Agente" : "Chat";\n' +
+'                vscode.postMessage({ command: "setMode", agentMode: isAgentMode });\n' +
+'                messageInput.placeholder = isAgentMode ? "Descreva o que você quer construir..." : "Digite sua mensagem...";\n' +
+'                // Limpa o chat ao trocar de modo\n' +
+'                chatContainer.innerHTML = \'<div class="empty-state"><div class="icon">\' + (isAgentMode ? "🤖" : "💬") + \'</div><div>\' + (isAgentMode ? "Modo Agente: posso criar e modificar arquivos" : "Modo Chat: apenas conversa") + \'</div></div>\';\n' +
+'            });\n' +
+'\n' +
+'            // Mudança de modelo\n' +
+'            modelSelect.addEventListener("change", function() {\n' +
+'                vscode.postMessage({ command: "updateModel", model: this.value });\n' +
+'            });\n' +
 '\n' +
 '            sendBtn.addEventListener("click", sendMessage);\n' +
 '            \n' +
@@ -691,11 +839,11 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '\n' +
 '            messageInput.addEventListener("input", function() {\n' +
 '                this.style.height = "auto";\n' +
-'                this.style.height = this.scrollHeight + "px";\n' +
+'                this.style.height = Math.min(this.scrollHeight, 120) + "px";\n' +
 '            });\n' +
 '\n' +
 '            clearBtn.addEventListener("click", function() {\n' +
-'                chatContainer.innerHTML = \'<div class="empty-state"><div class="icon">💬</div><div>Envie uma mensagem para começar</div></div>\';\n' +
+'                chatContainer.innerHTML = \'<div class="empty-state"><div class="icon">\' + (isAgentMode ? "🤖" : "💬") + \'</div><div>Descreva o que você quer construir</div></div>\';\n' +
 '                vscode.postMessage({ command: "clear" });\n' +
 '            });\n' +
 '\n' +
