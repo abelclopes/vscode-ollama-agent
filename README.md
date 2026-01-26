@@ -1,4 +1,5 @@
 # Ollama Chat Agent
+LINK DO PROJETO [https://github.com/abelclopes/vscode-ollama-agent]
 
 Uma extensão VS Code para chat com modelos Ollama rodando na sua rede local.
 
