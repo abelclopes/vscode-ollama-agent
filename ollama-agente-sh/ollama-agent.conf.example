@@ -1,0 +1,46 @@
+# Ollama Agent - Arquivo de Configuração de Exemplo
+# Copie este arquivo para ~/.ollama-agent.conf e edite conforme necessário
+
+# URL do servidor Ollama
+# Padrão: http://192.168.1.86:11434
+# Exemplos:
+#   - http://localhost:11434 (servidor local)
+#   - http://192.168.1.100:11434 (servidor na rede local)
+#   - https://api.ollama.example.com (servidor remoto com HTTPS)
+export OLLAMA_SERVER_URL="http://192.168.1.86:11434"
+
+# Modelo a ser utilizado
+# Padrão: qwen2.5-coder:latest
+# Para ver modelos disponíveis, execute: ./ollama-agent.sh --list-models
+# Exemplos:
+#   - qwen2.5-coder:latest
+#   - llama2:latest
+#   - codellama:latest
+#   - mistral:latest
+export OLLAMA_MODEL="qwen2.5-coder:latest"
+
+# Token de autenticação da API (opcional)
+# Se o seu servidor Ollama requer autenticação, configure aqui
+# O token será enviado como: Authorization: Bearer <token>
+# Deixe vazio se não usar autenticação
+export OLLAMA_API_TOKEN=""
+
+# Temperatura do modelo (0.0 a 1.0)
+# Padrão: 0.7
+# Valores menores (ex: 0.1) = respostas mais determinísticas e focadas
+# Valores maiores (ex: 0.9) = respostas mais criativas e variadas
+export OLLAMA_TEMPERATURE="0.7"
+
+# Como usar este arquivo:
+# 1. Copie para seu diretório home:
+#    cp ollama-agent.conf.example ~/.ollama-agent.conf
+#
+# 2. Edite as configurações:
+#    nano ~/.ollama-agent.conf
+#
+# 3. Carregue antes de usar o script:
+#    source ~/.ollama-agent.conf
+#    ./ollama-agent.sh "Sua mensagem"
+#
+# 4. Ou adicione ao seu ~/.bashrc para carregar automaticamente:
+#    echo "source ~/.ollama-agent.conf" >> ~/.bashrc

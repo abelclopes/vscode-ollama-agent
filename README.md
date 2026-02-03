@@ -42,6 +42,27 @@ Acesse as configurações do VS Code e configure:
 "Execute npm install express"
 ```
 
+## Script Shell (ollama-agente-sh)
+
+🖥️ **Script de linha de comando** - Use o Ollama diretamente do terminal Linux!
+
+O projeto agora inclui um script shell que pode ser executado diretamente do terminal, com suporte a autenticação por token:
+
+```bash
+cd ollama-agente-sh
+./ollama-agent.sh "Olá, como você está?"
+```
+
+**Recursos do Script:**
+- ✅ Execução direta via linha de comando
+- 🔐 Suporte a autenticação com token de API
+- 💬 Modo interativo para conversas contínuas
+- 🌊 Streaming de respostas em tempo real
+- ⚙️ Configuração via variáveis de ambiente ou argumentos
+- 📋 Comandos para testar conexão e listar modelos
+
+Veja mais detalhes em [`ollama-agente-sh/README.md`](ollama-agente-sh/README.md)
+
 ## Licença
 
 MIT
