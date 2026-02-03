@@ -109,6 +109,8 @@ process_stream() {
     while IFS= read -r line; do
         if [ -n "$line" ]; then
             # Extrai o conteúdo da mensagem do JSON
+            # Nota: Esta regex simples não suporta aspas escapadas dentro do conteúdo.
+            # Para parsing JSON robusto, considere instalar 'jq' e usar: echo "$line" | jq -r '.message.content // empty'
             content=$(echo "$line" | grep -o '"content":"[^"]*"' | sed 's/"content":"//g' | sed 's/"//g' | sed 's/\\n/\n/g')
             if [ -n "$content" ]; then
                 printf "%s" "$content"
@@ -123,8 +125,9 @@ send_message() {
     local message="$1"
     local json_data
     
-    # Escapa aspas duplas na mensagem
-    message=$(echo "$message" | sed 's/"/\\"/g')
+    # Escapa caracteres especiais JSON na mensagem
+    # Nota: Para escaping JSON completo, considere usar uma ferramenta como jq
+    message=$(echo "$message" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g')
     
     # Cria o JSON da requisição
     json_data=$(cat <<EOF

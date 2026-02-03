@@ -97,10 +97,12 @@ export OLLAMA_TEMPERATURE="0.7"
 ```bash
 ./ollama-agent.sh \
   -s http://api.ollama.example.com:11434 \
-  -t "Bearer seu-token-secreto" \
+  -t "seu-token-secreto" \
   -m codellama:latest \
   "Crie uma função para ordenar array em JavaScript"
 ```
+
+Nota: O script adiciona automaticamente o prefixo "Bearer " ao token. Forneça apenas o token em si.
 
 ### Modo interativo com todas as configurações
 
