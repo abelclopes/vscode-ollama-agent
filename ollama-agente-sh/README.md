@@ -12,7 +12,34 @@ Script shell para conectar diretamente à API Ollama usando linha de comando do 
 ```bash
 # Tornar o script executável (se necessário)
 chmod +x ollama-agent.sh
+
+# Testar a instalação
+./test.sh
 ```
+
+## Início Rápido
+
+```bash
+# 1. Verificar se está tudo OK
+./test.sh
+
+# 2. Testar conexão com o servidor
+./ollama-agent.sh --test-connection
+
+# 3. Listar modelos disponíveis
+./ollama-agent.sh --list-models
+
+# 4. Enviar primeira mensagem
+./ollama-agent.sh "Olá!"
+```
+
+## Arquivos
+
+- `ollama-agent.sh` - Script principal
+- `README.md` - Esta documentação
+- `EXEMPLOS.md` - Exemplos práticos de uso
+- `ollama-agent.conf.example` - Arquivo de configuração exemplo
+- `test.sh` - Script para testar a instalação
 
 ## Uso Básico
 
@@ -203,6 +230,11 @@ Se estiver usando token de autenticação, verifique se:
 - Suporta streaming de respostas em tempo real
 - Compatível com qualquer API que siga o formato do Ollama
 - Pode ser facilmente integrado em scripts automatizados ou pipelines
+
+## Mais Informações
+
+- **Exemplos práticos**: Veja [EXEMPLOS.md](EXEMPLOS.md) para casos de uso avançados
+- **Teste de instalação**: Execute `./test.sh` para verificar se tudo está funcionando
 
 ## Licença
 
