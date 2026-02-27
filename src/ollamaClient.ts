@@ -7,8 +7,14 @@ export interface OllamaMessage {
     content: string;
 }
 
+export interface ChatRequest {
+    abort: () => void;
+    promise: Promise<void>;
+}
+
 export class OllamaClient {
     private serverUrl: string;
+    private currentRequest?: http.ClientRequest;
 
     constructor() {
         const config = vscode.workspace.getConfiguration('ollamaAgent');
@@ -40,7 +46,18 @@ export class OllamaClient {
         }
     }
 
-    public async chat(messages: OllamaMessage[], onChunk: (chunk: string) => void): Promise<void> {
+    /**
+     * Aborta a requisição de chat atual, se houver
+     */
+    public abortCurrentRequest(): void {
+        if (this.currentRequest) {
+            this.currentRequest.destroy();
+            this.currentRequest = undefined;
+            console.log('[OllamaClient] Requisição abortada');
+        }
+    }
+
+    public chat(messages: OllamaMessage[], onChunk: (chunk: string) => void): ChatRequest {
         const config = vscode.workspace.getConfiguration('ollamaAgent');
         const model = config.get<string>('model', 'qwen2.5-coder:latest');
         const temperature = config.get<number>('temperature', 0.7);
@@ -53,7 +70,9 @@ export class OllamaClient {
             keep_alive: "5m"
         });
 
-        return new Promise((resolve, reject) => {
+        let aborted = false;
+
+        const promise = new Promise<void>((resolve, reject) => {
             const url = new URL(this.serverUrl);
             const options = {
                 hostname: url.hostname,
@@ -76,6 +95,8 @@ export class OllamaClient {
                 let buffer = '';
                 
                 res.on('data', (chunk) => {
+                    if (aborted) return;
+                    
                     buffer += chunk;
                     const lines = buffer.split('\n');
                     buffer = lines.pop() || '';
@@ -97,6 +118,11 @@ export class OllamaClient {
                 });
 
                 res.on('end', () => {
+                    if (aborted) {
+                        reject(new Error('Requisição cancelada'));
+                        return;
+                    }
+                    
                     if (buffer.trim()) {
                         try {
                             const json = JSON.parse(buffer);
@@ -111,10 +137,26 @@ export class OllamaClient {
                 });
             });
 
-            req.on('error', (e) => reject(e));
+            req.on('error', (e) => {
+                if (aborted) {
+                    reject(new Error('Requisição cancelada'));
+                } else {
+                    reject(e);
+                }
+            });
+            
+            this.currentRequest = req;
             req.write(body);
             req.end();
         });
+
+        return {
+            abort: () => {
+                aborted = true;
+                this.abortCurrentRequest();
+            },
+            promise
+        };
     }
 
     private makeRequest(method: string, path: string): Promise<string> {

@@ -1,13 +1,13 @@
 {
   "name": "vscode-ollama-agent",
   "displayName": "Ollama Chat Agent",
-  "description": "Chat com modelos Ollama na sua rede local - Agente de código com capacidade de criar, ler e deletar arquivos",
-  "version": "0.2.0",
-  "publisher": "abellopes",
+  "description": "Chat com modelos Ollama na sua rede local - Agente de código com capacidade de criar, editar, ler e deletar arquivos",
+  "version": "0.3.0",
+  "publisher": "abelclopes",
   "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/abellopes/vscode-ollama-agent"
+    "url": "https://github.com/abelclopes/vscode-ollama-agent"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -23,7 +23,9 @@
     "chat",
     "llama",
     "code assistant",
-    "agent"
+    "agent",
+    "refactor",
+    "code review"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -45,20 +47,74 @@
         }
       ]
     },
+    "commands": [
+      {
+        "command": "ollamaAgent.openChat",
+        "title": "Ollama: Abrir Chat"
+      },
+      {
+        "command": "ollamaAgent.explainSelection",
+        "title": "Ollama: Explicar Código Selecionado"
+      },
+      {
+        "command": "ollamaAgent.refactorSelection",
+        "title": "Ollama: Refatorar Código Selecionado"
+      },
+      {
+        "command": "ollamaAgent.fixErrors",
+        "title": "Ollama: Corrigir Erros do Projeto"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ollamaAgent.openChat",
+        "key": "ctrl+shift+o",
+        "mac": "cmd+shift+o"
+      },
+      {
+        "command": "ollamaAgent.explainSelection",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "ollamaAgent.refactorSelection",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorHasSelection"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ollamaAgent.explainSelection",
+          "when": "editorHasSelection",
+          "group": "ollama@1"
+        },
+        {
+          "command": "ollamaAgent.refactorSelection",
+          "when": "editorHasSelection",
+          "group": "ollama@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "Ollama Agent",
       "properties": {
         "ollamaAgent.serverUrl": {
           "type": "string",
-          "default": "http://192.168.1.86:11434"
+          "default": "http://192.168.1.86:11434",
+          "description": "URL do servidor Ollama"
         },
         "ollamaAgent.model": {
           "type": "string",
-          "default": "qwen2.5-coder:latest"
+          "default": "qwen2.5-coder:latest",
+          "description": "Modelo padrão a ser usado"
         },
         "ollamaAgent.temperature": {
           "type": "number",
-          "default": 0.7
+          "default": 0.7,
+          "description": "Temperatura do modelo (0.0 - 1.0)"
         }
       }
     }

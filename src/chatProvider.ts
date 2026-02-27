@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { OllamaClient, OllamaMessage } from './ollamaClient';
+import { OllamaClient, OllamaMessage, ChatRequest } from './ollamaClient';
 
 export class OllamaChatProvider implements vscode.WebviewViewProvider {
     private view?: vscode.WebviewView;
@@ -9,6 +9,8 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
     private agentMode: boolean = true;
     private workspaceContext: string = '';
     private workspaceContextLoaded: boolean = false;
+    private currentChatRequest?: ChatRequest;
+    private isProcessing: boolean = false;
 
     // Extensões de arquivos que devem ser lidos para contexto
     private readonly codeExtensions = [
@@ -92,6 +94,18 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
                         this.messages = []; // Limpa histórico ao trocar de modo
                         console.log('[ChatProvider] Modo alterado para:', this.agentMode ? 'Agente' : 'Chat');
                         break;
+                    case 'cancelRequest':
+                        this.cancelCurrentRequest();
+                        break;
+                    case 'getActiveFileContext':
+                        await this.sendActiveFileContext();
+                        break;
+                    case 'getSelectionContext':
+                        await this.sendSelectionContext();
+                        break;
+                    case 'getDiagnostics':
+                        await this.sendDiagnostics();
+                        break;
                     default:
                         console.warn('[ChatProvider] Comando desconhecido:', message.command);
                 }
@@ -109,6 +123,13 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 
     public show() {
         vscode.commands.executeCommand('ollamaChat.focus');
+    }
+
+    /**
+     * Método público para enviar mensagem programaticamente
+     */
+    public sendMessage(text: string) {
+        this.handleUserMessage(text);
     }
 
     private async testConnection() {
@@ -209,26 +230,41 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 
             const workspaceRoot = workspaceFolders[0].uri;
             const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+            
+            // Cria os diretórios pai se necessário
+            const parentDir = vscode.Uri.joinPath(fileUri, '..');
+            try {
+                await vscode.workspace.fs.stat(parentDir);
+            } catch {
+                // Diretório pai não existe, cria recursivamente
+                await vscode.workspace.fs.createDirectory(parentDir);
+            }
+            
             const contentBytes = Buffer.from(content, 'utf8');
             await vscode.workspace.fs.writeFile(fileUri, contentBytes);
 
+            console.log('[Agent] ✅ Arquivo criado com sucesso:', filePath);
+            
             this.view?.webview.postMessage({
                 command: 'fileCreated',
                 path: filePath,
                 success: true
             });
 
-            vscode.window.showInformationMessage('Arquivo criado: ' + filePath);
+            vscode.window.showInformationMessage('✅ Arquivo criado: ' + filePath);
             
+            // Abre o arquivo criado
             const document = await vscode.workspace.openTextDocument(fileUri);
             await vscode.window.showTextDocument(document);
         } catch (error) {
-            console.error('[ChatProvider] Erro ao criar arquivo:', error);
+            console.error('[ChatProvider] ❌ Erro ao criar arquivo:', error);
             this.view?.webview.postMessage({
                 command: 'fileCreated',
                 path: filePath,
-                success: false
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
             });
+            vscode.window.showErrorMessage('❌ Erro ao criar arquivo: ' + filePath);
         }
     }
 
@@ -257,73 +293,108 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
                 throw new Error('Arquivo não encontrado: ' + filePath);
             }
 
-            await vscode.workspace.fs.delete(fileUri, { recursive: false });
+            await vscode.workspace.fs.delete(fileUri, { recursive: true });
 
+            console.log('[Agent] ✅ Arquivo deletado:', filePath);
+            
             this.view?.webview.postMessage({
                 command: 'fileDeleted',
                 path: filePath,
                 success: true
             });
 
-            vscode.window.showInformationMessage('Arquivo deletado: ' + filePath);
+            vscode.window.showInformationMessage('✅ Arquivo deletado: ' + filePath);
         } catch (error) {
-            console.error('[ChatProvider] Erro ao deletar arquivo:', error);
+            console.error('[ChatProvider] ❌ Erro ao deletar arquivo:', error);
             this.view?.webview.postMessage({
                 command: 'fileDeleted',
                 path: filePath,
                 success: false
             });
-            vscode.window.showErrorMessage('Erro ao deletar arquivo: ' + filePath);
+            vscode.window.showErrorMessage('❌ Erro ao deletar arquivo: ' + filePath);
         }
     }
 
     private async processAgentActions(message: string) {
+        console.log('[Agent] Processando ações na mensagem de', message.length, 'caracteres');
+        
         // Regex mais flexível para capturar o padrão mesmo com markdown misturado
-        const fileRegex = /\[CRIAR_ARQUIVO:([^\]]+)\]([\s\S]*?)\[\/CRIAR_ARQUIVO\]/g;
-        const cmdRegex = /\[EXECUTAR_COMANDO\]([\s\S]*?)\[\/EXECUTAR_COMANDO\]/g;
-        const readRegex = /\[LER_ARQUIVO:([^\]]+)\]\[\/LER_ARQUIVO\]/g;
-        const listRegex = /\[LISTAR_DIRETORIO:([^\]]*)\]\[\/LISTAR_DIRETORIO\]/g;
-        const deleteRegex = /\[DELETAR_ARQUIVO:([^\]]+)\]\[\/DELETAR_ARQUIVO\]/g;
+        const fileRegex = /\[CRIAR_ARQUIVO:([^\]]+)\]([\s\S]*?)\[\/CRIAR_ARQUIVO\]/gi;
+        const editRegex = /\[EDITAR_ARQUIVO:([^\]]+)\]\s*\[BUSCAR\]([\s\S]*?)\[\/BUSCAR\]\s*\[SUBSTITUIR\]([\s\S]*?)\[\/SUBSTITUIR\]\s*\[\/EDITAR_ARQUIVO\]/gi;
+        const cmdRegex = /\[EXECUTAR_COMANDO\]([\s\S]*?)\[\/EXECUTAR_COMANDO\]/gi;
+        const readRegex = /\[LER_ARQUIVO:([^\]]+)\]\s*\[\/LER_ARQUIVO\]/gi;
+        const listRegex = /\[LISTAR_DIRETORIO:([^\]]*)\]\s*\[\/LISTAR_DIRETORIO\]/gi;
+        const deleteRegex = /\[DELETAR_ARQUIVO:([^\]]+)\]\s*\[\/DELETAR_ARQUIVO\]/gi;
 
+        let actionsFound = 0;
         let match;
 
         // Processa criação de arquivos automaticamente
         while ((match = fileRegex.exec(message)) !== null) {
+            actionsFound++;
             const filePath = match[1].trim();
             let content = match[2];
             // Limpa markdown do conteúdo
             content = this.cleanMarkdownFromContent(content);
             
-            console.log('[Agent] Criando arquivo:', filePath);
+            console.log('[Agent] ✅ Criando arquivo:', filePath);
             await this.createFile(filePath, content);
+        }
+
+        // Processa edição de arquivos
+        while ((match = editRegex.exec(message)) !== null) {
+            actionsFound++;
+            const filePath = match[1].trim();
+            const searchText = match[2];
+            const replaceText = match[3];
+            
+            console.log('[Agent] ✅ Editando arquivo:', filePath);
+            await this.editFile(filePath, searchText, replaceText);
         }
 
         // Processa comandos de terminal automaticamente
         while ((match = cmdRegex.exec(message)) !== null) {
+            actionsFound++;
             const cmd = match[1].trim();
-            console.log('[Agent] Executando comando:', cmd);
+            console.log('[Agent] ✅ Executando comando:', cmd);
             await this.runTerminalCommand(cmd);
         }
 
         // Processa leitura de arquivos
         while ((match = readRegex.exec(message)) !== null) {
+            actionsFound++;
             const filePath = match[1].trim();
-            console.log('[Agent] Lendo arquivo:', filePath);
+            console.log('[Agent] ✅ Lendo arquivo:', filePath);
             await this.readFile(filePath);
         }
 
         // Processa listagem de diretórios
         while ((match = listRegex.exec(message)) !== null) {
+            actionsFound++;
             const dirPath = match[1].trim();
-            console.log('[Agent] Listando diretório:', dirPath);
+            console.log('[Agent] ✅ Listando diretório:', dirPath);
             await this.listDirectory(dirPath);
         }
 
         // Processa deleção de arquivos
         while ((match = deleteRegex.exec(message)) !== null) {
+            actionsFound++;
             const filePath = match[1].trim();
-            console.log('[Agent] Deletando arquivo:', filePath);
+            console.log('[Agent] ✅ Deletando arquivo:', filePath);
             await this.deleteFile(filePath);
+        }
+        
+        if (actionsFound === 0) {
+            console.log('[Agent] ⚠️ Nenhuma ação encontrada na resposta');
+            // Verifica se há padrões parciais para debug
+            if (message.includes('[CRIAR_ARQUIVO') || message.includes('[EDITAR_ARQUIVO') || 
+                message.includes('[EXECUTAR_COMANDO') || message.includes('CRIAR_ARQUIVO') ||
+                message.includes('EDITAR_ARQUIVO') || message.includes('EXECUTAR_COMANDO')) {
+                console.log('[Agent] Padrões parciais detectados - modelo pode estar usando formato incorreto');
+                console.log('[Agent] Primeiros 500 chars:', message.substring(0, 500));
+            }
+        } else {
+            console.log('[Agent] Total de ações executadas:', actionsFound);
         }
     }
 
@@ -335,12 +406,18 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
             this.terminal.show();
             this.terminal.sendText(command);
             
+            console.log('[Agent] ✅ Comando executado:', command);
+            
             this.view?.webview.postMessage({
                 command: 'commandExecuted',
+                text: command,
                 success: true
             });
+            
+            vscode.window.showInformationMessage('✅ Comando executado: ' + command);
         } catch (error) {
-            console.error('[ChatProvider] Erro ao executar comando:', error);
+            console.error('[ChatProvider] ❌ Erro ao executar comando:', error);
+            vscode.window.showErrorMessage('❌ Erro ao executar comando: ' + command);
         }
     }
 
@@ -517,19 +594,35 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
             return '';
         }
 
-        // Monta o contexto com todos os arquivos
-        let context = '=== CONTEXTO DO WORKSPACE ===\n\n';
-        context += `Total de arquivos: ${files.length}\n\n`;
+        // Limita o contexto total para não sobrecarregar o modelo (max 100KB)
+        const maxContextSize = 100000;
+        let currentSize = 0;
+        const includedFiles: typeof files = [];
         
-        for (const file of files) {
-            context += `--- Arquivo: ${file.path} ---\n`;
+        // Prioriza arquivos menores primeiro para incluir mais arquivos
+        const sortedFiles = files.sort((a, b) => a.content.length - b.content.length);
+        
+        for (const file of sortedFiles) {
+            if (currentSize + file.content.length > maxContextSize) {
+                break;
+            }
+            includedFiles.push(file);
+            currentSize += file.content.length;
+        }
+
+        // Monta o contexto com os arquivos incluídos
+        let context = '=== CONTEXTO DO WORKSPACE ===\n';
+        context += `Arquivos incluídos: ${includedFiles.length}/${files.length}\n\n`;
+        
+        for (const file of includedFiles) {
+            context += `--- ${file.path} ---\n`;
             context += file.content;
             context += '\n\n';
         }
         
-        context += '=== FIM DO CONTEXTO ===\n';
+        context += '=== FIM DO CONTEXTO ===';
         
-        console.log(`[ChatProvider] Workspace carregado: ${files.length} arquivos`);
+        console.log(`[ChatProvider] Workspace carregado: ${includedFiles.length}/${files.length} arquivos (${Math.round(currentSize/1024)}KB)`);
         
         return context;
     }
@@ -553,45 +646,422 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         this.workspaceContext = '';
     }
 
+    /**
+     * Cancela a requisição de chat atual
+     */
+    private cancelCurrentRequest() {
+        if (this.currentChatRequest) {
+            this.currentChatRequest.abort();
+            this.currentChatRequest = undefined;
+            this.isProcessing = false;
+            
+            this.view?.webview.postMessage({
+                command: 'requestCancelled'
+            });
+            
+            console.log('[ChatProvider] Requisição cancelada pelo usuário');
+        }
+    }
+
+    /**
+     * Envia o contexto do arquivo ativo para o webview
+     */
+    private async sendActiveFileContext() {
+        const editor = vscode.window.activeTextEditor;
+        
+        if (!editor) {
+            this.view?.webview.postMessage({
+                command: 'activeFileContext',
+                hasFile: false,
+                content: ''
+            });
+            return;
+        }
+
+        const document = editor.document;
+        const fileName = document.fileName;
+        const relativePath = vscode.workspace.asRelativePath(fileName);
+        const content = document.getText();
+        const languageId = document.languageId;
+
+        this.view?.webview.postMessage({
+            command: 'activeFileContext',
+            hasFile: true,
+            fileName: relativePath,
+            languageId: languageId,
+            content: content
+        });
+    }
+
+    /**
+     * Envia o texto selecionado no editor para o webview
+     */
+    private async sendSelectionContext() {
+        const editor = vscode.window.activeTextEditor;
+        
+        if (!editor || editor.selection.isEmpty) {
+            this.view?.webview.postMessage({
+                command: 'selectionContext',
+                hasSelection: false,
+                content: ''
+            });
+            return;
+        }
+
+        const document = editor.document;
+        const selection = editor.selection;
+        const selectedText = document.getText(selection);
+        const fileName = vscode.workspace.asRelativePath(document.fileName);
+        const startLine = selection.start.line + 1;
+        const endLine = selection.end.line + 1;
+        const languageId = document.languageId;
+
+        this.view?.webview.postMessage({
+            command: 'selectionContext',
+            hasSelection: true,
+            fileName: fileName,
+            startLine: startLine,
+            endLine: endLine,
+            languageId: languageId,
+            content: selectedText
+        });
+    }
+
+    /**
+     * Envia os diagnósticos (erros/warnings) do VS Code para o webview
+     */
+    private async sendDiagnostics() {
+        const allDiagnostics = vscode.languages.getDiagnostics();
+        const diagnosticsList: Array<{
+            file: string;
+            line: number;
+            severity: string;
+            message: string;
+            source?: string;
+        }> = [];
+
+        for (const [uri, diagnostics] of allDiagnostics) {
+            const relativePath = vscode.workspace.asRelativePath(uri);
+            
+            for (const diagnostic of diagnostics) {
+                let severity = 'info';
+                switch (diagnostic.severity) {
+                    case vscode.DiagnosticSeverity.Error:
+                        severity = 'error';
+                        break;
+                    case vscode.DiagnosticSeverity.Warning:
+                        severity = 'warning';
+                        break;
+                    case vscode.DiagnosticSeverity.Information:
+                        severity = 'info';
+                        break;
+                    case vscode.DiagnosticSeverity.Hint:
+                        severity = 'hint';
+                        break;
+                }
+
+                diagnosticsList.push({
+                    file: relativePath,
+                    line: diagnostic.range.start.line + 1,
+                    severity: severity,
+                    message: diagnostic.message,
+                    source: diagnostic.source
+                });
+            }
+        }
+
+        this.view?.webview.postMessage({
+            command: 'diagnosticsContext',
+            hasDiagnostics: diagnosticsList.length > 0,
+            diagnostics: diagnosticsList,
+            errorCount: diagnosticsList.filter(d => d.severity === 'error').length,
+            warningCount: diagnosticsList.filter(d => d.severity === 'warning').length
+        });
+    }
+
+    /**
+     * Obtém o contexto do arquivo ativo como string formatada
+     */
+    private async getActiveFileContextString(): Promise<string> {
+        const editor = vscode.window.activeTextEditor;
+        
+        if (!editor) {
+            return '';
+        }
+
+        const document = editor.document;
+        const relativePath = vscode.workspace.asRelativePath(document.fileName);
+        const content = document.getText();
+        const languageId = document.languageId;
+
+        return `\n\n=== ARQUIVO ATIVO: ${relativePath} (${languageId}) ===\n${content}\n=== FIM DO ARQUIVO ATIVO ===`;
+    }
+
+    /**
+     * Obtém o texto selecionado como string formatada
+     */
+    private async getSelectionContextString(): Promise<string> {
+        const editor = vscode.window.activeTextEditor;
+        
+        if (!editor || editor.selection.isEmpty) {
+            return '';
+        }
+
+        const document = editor.document;
+        const selection = editor.selection;
+        const selectedText = document.getText(selection);
+        const relativePath = vscode.workspace.asRelativePath(document.fileName);
+        const startLine = selection.start.line + 1;
+        const endLine = selection.end.line + 1;
+        const languageId = document.languageId;
+
+        return `\n\n=== CÓDIGO SELECIONADO: ${relativePath} (linhas ${startLine}-${endLine}, ${languageId}) ===\n${selectedText}\n=== FIM DA SELEÇÃO ===`;
+    }
+
+    /**
+     * Obtém os diagnósticos como string formatada
+     */
+    private async getDiagnosticsContextString(): Promise<string> {
+        const allDiagnostics = vscode.languages.getDiagnostics();
+        let result = '';
+        let errorCount = 0;
+        let warningCount = 0;
+
+        for (const [uri, diagnostics] of allDiagnostics) {
+            const relativePath = vscode.workspace.asRelativePath(uri);
+            
+            for (const diagnostic of diagnostics) {
+                let severity = 'INFO';
+                switch (diagnostic.severity) {
+                    case vscode.DiagnosticSeverity.Error:
+                        severity = 'ERRO';
+                        errorCount++;
+                        break;
+                    case vscode.DiagnosticSeverity.Warning:
+                        severity = 'AVISO';
+                        warningCount++;
+                        break;
+                }
+
+                if (diagnostic.severity <= vscode.DiagnosticSeverity.Warning) {
+                    result += `[${severity}] ${relativePath}:${diagnostic.range.start.line + 1} - ${diagnostic.message}\n`;
+                }
+            }
+        }
+
+        if (!result) {
+            return '';
+        }
+
+        return `\n\n=== DIAGNÓSTICOS DO PROJETO (${errorCount} erros, ${warningCount} avisos) ===\n${result}=== FIM DOS DIAGNÓSTICOS ===`;
+    }
+
+    /**
+     * Edita um arquivo existente substituindo texto
+     */
+    private async editFile(filePath: string, searchText: string, replaceText: string) {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('Nenhum workspace aberto');
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri;
+            const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+            
+            // Lê o arquivo atual
+            const contentBytes = await vscode.workspace.fs.readFile(fileUri);
+            let content = Buffer.from(contentBytes).toString('utf8');
+            
+            // Limpa o searchText de possíveis marcações markdown
+            const cleanSearchText = searchText.trim();
+            const cleanReplaceText = replaceText.trim();
+            
+            console.log('[Agent] Buscando texto:', cleanSearchText.substring(0, 100));
+            
+            // Verifica se o texto a buscar existe
+            if (!content.includes(cleanSearchText)) {
+                // Tenta busca mais flexível (ignorando espaços extras)
+                const normalizedContent = content.replace(/\s+/g, ' ');
+                const normalizedSearch = cleanSearchText.replace(/\s+/g, ' ');
+                
+                if (!normalizedContent.includes(normalizedSearch)) {
+                    throw new Error('Texto não encontrado no arquivo. Verifique se o texto está exatamente igual ao original.');
+                }
+                // Se encontrou com normalização, usa regex para substituir
+                const searchRegex = new RegExp(cleanSearchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'g');
+                content = content.replace(searchRegex, cleanReplaceText);
+            } else {
+                // Substituição normal
+                content = content.replace(cleanSearchText, cleanReplaceText);
+            }
+            
+            // Salva o arquivo
+            await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content, 'utf8'));
+            
+            console.log('[Agent] ✅ Arquivo editado com sucesso:', filePath);
+            
+            this.view?.webview.postMessage({
+                command: 'fileEdited',
+                path: filePath,
+                success: true
+            });
+
+            vscode.window.showInformationMessage('✅ Arquivo editado: ' + filePath);
+            
+            // Abre o arquivo editado
+            const document = await vscode.workspace.openTextDocument(fileUri);
+            await vscode.window.showTextDocument(document);
+        } catch (error) {
+            console.error('[ChatProvider] ❌ Erro ao editar arquivo:', error);
+            this.view?.webview.postMessage({
+                command: 'fileEdited',
+                path: filePath,
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            });
+            vscode.window.showErrorMessage('❌ Erro ao editar arquivo: ' + (error instanceof Error ? error.message : String(error)));
+        }
+    }
+
     private async handleUserMessage(text: string) {
         if (!text.trim()) return;
+        if (this.isProcessing) {
+            vscode.window.showWarningMessage('Aguarde a resposta atual terminar ou cancele-a.');
+            return;
+        }
 
+        this.isProcessing = true;
         console.log('[ChatProvider] Processando mensagem:', text.substring(0, 50));
+
+        // Coleta contextos adicionais
+        let additionalContext = '';
+        
+        // Sempre inclui o arquivo ativo e seleção quando disponíveis
+        const activeFileContext = await this.getActiveFileContextString();
+        const selectionContext = await this.getSelectionContextString();
+        const diagnosticsContext = await this.getDiagnosticsContextString();
+        
+        if (activeFileContext) {
+            additionalContext += activeFileContext;
+        }
+        if (selectionContext) {
+            additionalContext += selectionContext;
+        }
+        if (diagnosticsContext) {
+            additionalContext += diagnosticsContext;
+        }
 
         // Verifica se precisa carregar contexto do workspace
         let workspaceContext = '';
         if (this.agentMode && this.needsWorkspaceContext(text)) {
-            // Envia mensagem de "Pensando..." enquanto carrega o contexto
+            // Mostra indicador discreto de loading
             this.view?.webview.postMessage({
                 command: 'thinking',
-                text: '🧠 Pensando... Analisando o código do workspace...'
+                text: 'Analisando workspace...'
             });
             
             workspaceContext = await this.getWorkspaceContext();
             
-            // Remove mensagem de pensando
+            // Remove indicador
             this.view?.webview.postMessage({
                 command: 'thinkingComplete'
             });
         }
 
         if (this.messages.length === 0) {
-            let systemPrompt = this.agentMode 
-                ? 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n### Deletar arquivo:\n[DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n5. CUIDADO ao deletar arquivos - confirme antes se necessário\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
-                : 'Você é um assistente de programação amigável e prestativo. Responda perguntas sobre código, ajude a explicar conceitos e forneça exemplos quando solicitado. Use blocos de código markdown para mostrar exemplos de código.';
+            // Instruções do agente - serão colocadas no FINAL do system prompt
+            const agentInstructions = `Você é um agente de programação. Você pode executar ações reais no sistema de arquivos do usuário.
+
+IMPORTANTE: Para fazer qualquer modificação, você DEVE usar estes comandos especiais na sua resposta:
+
+Para CRIAR um arquivo novo, escreva exatamente assim:
+[CRIAR_ARQUIVO:caminho/do/arquivo.ts]
+seu código aqui
+[/CRIAR_ARQUIVO]
+
+Para EDITAR um arquivo existente, escreva exatamente assim:
+[EDITAR_ARQUIVO:caminho/do/arquivo.ts]
+[BUSCAR]
+código exato que existe no arquivo
+[/BUSCAR]
+[SUBSTITUIR]
+código novo que vai substituir
+[/SUBSTITUIR]
+[/EDITAR_ARQUIVO]
+
+Para EXECUTAR um comando no terminal, escreva assim:
+[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]
+
+REGRAS:
+- Quando pedirem para criar arquivo, USE [CRIAR_ARQUIVO]
+- Quando pedirem para editar/modificar, USE [EDITAR_ARQUIVO]  
+- Quando pedirem para instalar/rodar algo, USE [EXECUTAR_COMANDO]
+- NÃO mostre código em blocos markdown quando for modificar arquivos
+- Os comandos serão executados automaticamente pelo sistema`;
+
+            const chatInstructions = 'Você é um assistente de programação amigável. Use blocos de código markdown para exemplos.';
+
+            let systemPrompt = '';
             
-            // Adiciona contexto do workspace ao system prompt se disponível
+            // Primeiro: contexto do workspace (se houver)
             if (workspaceContext) {
-                systemPrompt += '\n\n' + workspaceContext;
+                systemPrompt += workspaceContext + '\n\n';
+            }
+            
+            // Segundo: contexto adicional (arquivo ativo, seleção, erros)
+            if (additionalContext) {
+                systemPrompt += additionalContext + '\n\n';
+            }
+            
+            // Terceiro: instruções do agente (no final para serem mais "frescas" na memória do modelo)
+            systemPrompt += this.agentMode ? agentInstructions : chatInstructions;
+            
+            // Quarto: lembrete final - bem direto
+            if (this.agentMode) {
+                systemPrompt += '\n\nLembre-se: Use [CRIAR_ARQUIVO:...], [EDITAR_ARQUIVO:...] ou [EXECUTAR_COMANDO] para executar ações.';
             }
             
             this.messages.push({
                 role: 'system',
                 content: systemPrompt
             });
-        } else if (workspaceContext && !this.messages[0].content.includes('=== CONTEXTO DO WORKSPACE ===')) {
-            // Se já tem mensagens mas ainda não tem contexto, adiciona ao system prompt
-            this.messages[0].content += '\n\n' + workspaceContext;
+        } else {
+            // Atualiza contextos no system prompt existente
+            // Mantém as instruções no final
+            let systemContent = this.messages[0].content;
+            
+            // Encontra onde começam as instruções do agente
+            const instructionsStart = systemContent.indexOf('Você é um agente de programação');
+            const chatInstructionsStart = systemContent.indexOf('Você é um assistente de programação');
+            const splitPoint = instructionsStart > -1 ? instructionsStart : (chatInstructionsStart > -1 ? chatInstructionsStart : systemContent.length);
+            
+            // Parte das instruções (final)
+            const instructionsPart = systemContent.substring(splitPoint);
+            
+            // Reconstrói o system prompt
+            let newSystemContent = '';
+            
+            // Adiciona contexto do workspace se necessário
+            if (workspaceContext && !systemContent.includes('=== CONTEXTO DO WORKSPACE ===')) {
+                newSystemContent += workspaceContext + '\n\n';
+            } else {
+                // Mantém contexto existente do workspace
+                const wsMatch = systemContent.match(/=== CONTEXTO DO WORKSPACE ===[\s\S]*?=== FIM DO CONTEXTO ===/);
+                if (wsMatch) {
+                    newSystemContent += wsMatch[0] + '\n\n';
+                }
+            }
+            
+            // Adiciona contextos atualizados
+            if (additionalContext) {
+                newSystemContent += additionalContext + '\n\n';
+            }
+            
+            // Adiciona instruções no final
+            newSystemContent += instructionsPart;
+            
+            this.messages[0].content = newSystemContent;
         }
 
         this.messages.push({ role: 'user', content: text });
@@ -601,13 +1071,16 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         let assistantMessage = '';
 
         try {
-            await this.ollamaClient.chat(this.messages, (chunk: string) => {
+            // Usa a nova API com suporte a cancelamento
+            this.currentChatRequest = this.ollamaClient.chat(this.messages, (chunk: string) => {
                 assistantMessage += chunk;
                 this.view?.webview.postMessage({
                     command: 'assistantChunk',
                     text: chunk
                 });
             });
+
+            await this.currentChatRequest.promise;
 
             this.messages.push({ role: 'assistant', content: assistantMessage });
             
@@ -621,10 +1094,17 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         } catch (error) {
             console.error('[ChatProvider] Erro no chat:', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
-            this.view?.webview.postMessage({
-                command: 'error',
-                text: errorMessage
-            });
+            
+            // Não mostra erro se foi cancelamento
+            if (!errorMessage.includes('cancelada')) {
+                this.view?.webview.postMessage({
+                    command: 'error',
+                    text: errorMessage
+                });
+            }
+        } finally {
+            this.isProcessing = false;
+            this.currentChatRequest = undefined;
         }
     }
 
@@ -893,6 +1373,58 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            opacity: 0.4;\n' +
 '            cursor: not-allowed;\n' +
 '        }\n' +
+'        .cancel-btn {\n' +
+'            background: var(--vscode-button-secondaryBackground);\n' +
+'            border: none;\n' +
+'            color: var(--vscode-button-secondaryForeground);\n' +
+'            width: 28px;\n' +
+'            height: 28px;\n' +
+'            border-radius: 6px;\n' +
+'            cursor: pointer;\n' +
+'            display: none;\n' +
+'            align-items: center;\n' +
+'            justify-content: center;\n' +
+'            font-size: 14px;\n' +
+'        }\n' +
+'        .cancel-btn:hover {\n' +
+'            background: var(--vscode-button-secondaryHoverBackground);\n' +
+'        }\n' +
+'        .cancel-btn.visible {\n' +
+'            display: flex;\n' +
+'        }\n' +
+'        .context-indicator {\n' +
+'            display: flex;\n' +
+'            align-items: center;\n' +
+'            gap: 4px;\n' +
+'            font-size: 10px;\n' +
+'            opacity: 0.7;\n' +
+'            padding: 2px 6px;\n' +
+'            background: var(--vscode-badge-background);\n' +
+'            color: var(--vscode-badge-foreground);\n' +
+'            border-radius: 3px;\n' +
+'        }\n' +
+'        .thinking-indicator {\n' +
+'            display: flex;\n' +
+'            align-items: center;\n' +
+'            gap: 4px;\n' +
+'            font-size: 12px;\n' +
+'            opacity: 0.7;\n' +
+'            padding: 8px 12px;\n' +
+'            color: var(--vscode-descriptionForeground);\n' +
+'        }\n' +
+'        .thinking-dots {\n' +
+'            display: inline-flex;\n' +
+'        }\n' +
+'        .thinking-dots span {\n' +
+'            animation: thinking 1.4s infinite;\n' +
+'            opacity: 0.3;\n' +
+'        }\n' +
+'        .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }\n' +
+'        .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }\n' +
+'        @keyframes thinking {\n' +
+'            0%, 100% { opacity: 0.3; }\n' +
+'            50% { opacity: 1; }\n' +
+'        }\n' +
 '        .empty-state {\n' +
 '            flex: 1;\n' +
 '            display: flex;\n' +
@@ -960,6 +1492,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                </div>\n' +
 '                <div class="input-bottom-right">\n' +
 '                    <button class="icon-btn-sm" id="settingsBtn" title="Configurações">⚙️</button>\n' +
+'                    <button class="cancel-btn" id="cancelBtn" title="Cancelar">⏹</button>\n' +
 '                    <button class="send-btn" id="sendBtn" title="Enviar">➤</button>\n' +
 '                </div>\n' +
 '            </div>\n' +
@@ -973,6 +1506,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            var chatContainer = document.getElementById("chatContainer");\n' +
 '            var messageInput = document.getElementById("messageInput");\n' +
 '            var sendBtn = document.getElementById("sendBtn");\n' +
+'            var cancelBtn = document.getElementById("cancelBtn");\n' +
 '            var clearBtn = document.getElementById("clearBtn");\n' +
 '            var settingsBtn = document.getElementById("settingsBtn");\n' +
 '            var reloadBtn = document.getElementById("reloadBtn");\n' +
@@ -996,6 +1530,11 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            \n' +
 '            console.log("[WebView] Solicitando lista de modelos...");\n' +
 '            vscode.postMessage({ command: "listModels" });\n' +
+'\n' +
+'            // Botão de cancelar\n' +
+'            cancelBtn.addEventListener("click", function() {\n' +
+'                vscode.postMessage({ command: "cancelRequest" });\n' +
+'            });\n' +
 '\n' +
 '            // Toggle de modo via botão dropdown\n' +
 '            modeBtn.addEventListener("click", function() {\n' +
@@ -1067,6 +1606,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                messageInput.style.height = "auto";\n' +
 '                isProcessing = true;\n' +
 '                sendBtn.disabled = true;\n' +
+'                cancelBtn.classList.add("visible");\n' +
 '            }\n' +
 '\n' +
 '            function removeEmptyState() {\n' +
@@ -1094,15 +1634,12 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '            }\n' +
 '\n' +'            var thinkingElement = null;\n' +
 '            function showThinking(text) {\n' +
-'                removeEmptyState();\n' +
 '                if (thinkingElement) {\n' +
-'                    thinkingElement.querySelector(".message-content").textContent = text;\n' +
 '                    return;\n' +
 '                }\n' +
 '                var div = document.createElement("div");\n' +
-'                div.className = "message assistant thinking-message";\n' +
-'                div.innerHTML = \'<div class="message-header">🧠 Processando</div><div class="message-content" style="font-style:italic;opacity:0.8;"></div>\';\n' +
-'                div.querySelector(".message-content").textContent = text;\n' +
+'                div.className = "thinking-indicator";\n' +
+'                div.innerHTML = \'<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> \' + text;\n' +
 '                chatContainer.appendChild(div);\n' +
 '                thinkingElement = div;\n' +
 '                chatContainer.scrollTop = chatContainer.scrollHeight;\n' +
@@ -1137,6 +1674,7 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                currentAssistantContent = null;\n' +
 '                isProcessing = false;\n' +
 '                sendBtn.disabled = false;\n' +
+'                cancelBtn.classList.remove("visible");\n' +
 '                messageInput.focus();\n' +
 '            }\n' +
 '\n' +
@@ -1305,6 +1843,19 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
 '                        break;\n' +
 '                    case "thinkingComplete":\n' +
 '                        hideThinking();\n' +
+'                        break;\n' +
+'                    case "requestCancelled":\n' +
+'                        if (currentAssistantContent) {\n' +
+'                            currentAssistantContent.textContent += "\\n\\n⏹ Cancelado pelo usuário";\n' +
+'                        }\n' +
+'                        completeMessage();\n' +
+'                        break;\n' +
+'                    case "fileEdited":\n' +
+'                        if (msg.success) {\n' +
+'                            addSystemMessage("✅ Arquivo editado: " + msg.path);\n' +
+'                        } else {\n' +
+'                            addSystemMessage("❌ Erro ao editar: " + msg.error);\n' +
+'                        }\n' +
 '                        break;\n' +
 '                }\n' +
 '            });\n' +
