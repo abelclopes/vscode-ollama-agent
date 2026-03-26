@@ -1,8 +1,8 @@
 {
   "name": "vscode-ollama-agent",
   "displayName": "Ollama Chat Agent",
-  "description": "Chat com modelos Ollama na sua rede local - Agente de código com capacidade de criar, ler e deletar arquivos",
-  "version": "0.2.0",
+  "description": "Chat com modelos Ollama na sua rede local - Agente de código com capacidade de criar, ler, editar e deletar arquivos + busca e exploração de projeto",
+  "version": "0.3.1",
   "publisher": "abellopes",
   "icon": "icon.png",
   "repository": {
@@ -50,7 +50,7 @@
       "properties": {
         "ollamaAgent.serverUrl": {
           "type": "string",
-          "default": "http://192.168.1.86:11434"
+          "default": "http://localhost:11434"
         },
         "ollamaAgent.model": {
           "type": "string",
@@ -72,6 +72,11 @@
   "devDependencies": {
     "@types/node": "^20.x",
     "@types/vscode": "^1.85.0",
-    "typescript": "^5.3.0"
+    "@vscode/vsce": "^3.7.1",
+    "typescript": "^5.3.0",
+    "vsce": "^2.15.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
   }
 }

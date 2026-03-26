@@ -12,7 +12,7 @@ export class OllamaClient {
 
     constructor() {
         const config = vscode.workspace.getConfiguration('ollamaAgent');
-        this.serverUrl = config.get<string>('serverUrl', 'http://192.168.1.86:11434');
+        this.serverUrl = config.get<string>('serverUrl', 'http://localhost:11434');
     }
 
     public updateServerUrl(url: string) {

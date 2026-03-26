@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { OllamaClient, OllamaMessage } from './ollamaClient';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class OllamaChatProvider implements vscode.WebviewViewProvider {
     private view?: vscode.WebviewView;
@@ -7,9 +9,63 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
     private messages: OllamaMessage[] = [];
     private terminal?: vscode.Terminal;
     private agentMode: boolean = true;
+    private skillsConfig: any = null;
+    private systemPromptTemplate: string = '';
 
     constructor(private context: vscode.ExtensionContext) {
         this.ollamaClient = new OllamaClient();
+        this.loadSkillsConfiguration();
+    }
+
+    private loadSkillsConfiguration() {
+        try {
+            const skillsPath = path.join(this.context.extensionPath, 'skills.json');
+            if (fs.existsSync(skillsPath)) {
+                const skillsContent = fs.readFileSync(skillsPath, 'utf-8');
+                this.skillsConfig = JSON.parse(skillsContent);
+                this.systemPromptTemplate = this.skillsConfig.systemPromptTemplate || '';
+                console.log('[ChatProvider] Skills configuration loaded from skills.json');
+            } else {
+                console.warn('[ChatProvider] skills.json not found, using default configuration');
+            }
+        } catch (error) {
+            console.error('[ChatProvider] Error loading skills.json:', error);
+        }
+    }
+
+    private buildSystemPrompt(agentMode: boolean): string {
+        if (!this.skillsConfig) {
+            return agentMode 
+                ? 'Você é um agente de programação com acesso REAL ao sistema de arquivos e ao VS Code.'
+                : 'Você é um assistente de programação amigável e prestativo.';
+        }
+
+        if (!agentMode) {
+            return 'Você é um assistente de programação amigável e prestativo. Responda perguntas sobre código, ajude a explicar conceitos e forneça exemplos quando solicitado. Use blocos de código markdown para mostrar exemplos de código.';
+        }
+
+        // Construir lista de skills
+        let skillsList = '';
+        if (this.skillsConfig.skills) {
+            skillsList = this.skillsConfig.skills.map((skill: any) => {
+                return `### ${skill.name}\n${skill.description}\n\`\`\`\n${skill.syntax}\n\`\`\``;
+            }).join('\n\n');
+        }
+
+        // Construir regras globais
+        let globalRules = '';
+        if (this.skillsConfig.globalRules) {
+            globalRules = this.skillsConfig.globalRules.map((rule: string, index: number) => {
+                return `${index + 1}. ${rule}`;
+            }).join('\n');
+        }
+
+        // Substituir placeholders no template
+        let prompt = this.systemPromptTemplate;
+        prompt = prompt.replace('{SKILLS_LIST}', skillsList);
+        prompt = prompt.replace('{GLOBAL_RULES}', globalRules);
+
+        return prompt;
     }
 
     public resolveWebviewView(
@@ -260,10 +316,16 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
     private async processAgentActions(message: string) {
         // Regex mais flexível para capturar o padrão mesmo com markdown misturado
         const fileRegex = /\[CRIAR_ARQUIVO:([^\]]+)\]([\s\S]*?)\[\/CRIAR_ARQUIVO\]/g;
+        const editRegex = /\[EDITAR_ARQUIVO:([^\]]+)\]([\s\S]*?)\[\/EDITAR_ARQUIVO\]/g;
         const cmdRegex = /\[EXECUTAR_COMANDO\]([\s\S]*?)\[\/EXECUTAR_COMANDO\]/g;
         const readRegex = /\[LER_ARQUIVO:([^\]]+)\]\[\/LER_ARQUIVO\]/g;
         const listRegex = /\[LISTAR_DIRETORIO:([^\]]*)\]\[\/LISTAR_DIRETORIO\]/g;
         const deleteRegex = /\[DELETAR_ARQUIVO:([^\]]+)\]\[\/DELETAR_ARQUIVO\]/g;
+        const findSymbolRegex = /\[BUSCAR_SIMBOLOS:([^\]]+)\]\[\/BUSCAR_SIMBOLOS\]/g;
+        const findRefsRegex = /\[BUSCAR_REFS:([^\]]+)\]\[\/BUSCAR_REFS\]/g;
+        const findTextRegex = /\[BUSCAR_TEXTO:([^\]]+)\]\[\/BUSCAR_TEXTO\]/g;
+        const explorerRegex = /\[EXPLORAR_PROJETO\]\[\/EXPLORAR_PROJETO\]/g;
+        const vsCodeCmdRegex = /\[EXECUTAR_VSCODE:([^\]]+)\]\[\/EXECUTAR_VSCODE\]/g;
 
         let match;
 
@@ -276,6 +338,16 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
             
             console.log('[Agent] Criando arquivo:', filePath);
             await this.createFile(filePath, content);
+        }
+
+        // Processa edição de arquivos
+        while ((match = editRegex.exec(message)) !== null) {
+            const filePath = match[1].trim();
+            let content = match[2];
+            content = this.cleanMarkdownFromContent(content);
+            
+            console.log('[Agent] Editando arquivo:', filePath);
+            await this.editFile(filePath, content);
         }
 
         // Processa comandos de terminal automaticamente
@@ -304,6 +376,40 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
             const filePath = match[1].trim();
             console.log('[Agent] Deletando arquivo:', filePath);
             await this.deleteFile(filePath);
+        }
+
+        // Processa busca de símbolos
+        while ((match = findSymbolRegex.exec(message)) !== null) {
+            const query = match[1].trim();
+            console.log('[Agent] Buscando símbolo:', query);
+            await this.findSymbols(query);
+        }
+
+        // Processa busca de referências
+        while ((match = findRefsRegex.exec(message)) !== null) {
+            const query = match[1].trim();
+            console.log('[Agent] Buscando referências:', query);
+            await this.findReferences(query);
+        }
+
+        // Processa busca de texto
+        while ((match = findTextRegex.exec(message)) !== null) {
+            const query = match[1].trim();
+            console.log('[Agent] Buscando texto:', query);
+            await this.findText(query);
+        }
+
+        // Processa exploração do projeto
+        while ((match = explorerRegex.exec(message)) !== null) {
+            console.log('[Agent] Explorando projeto');
+            await this.exploreProject();
+        }
+
+        // Processa comandos VS Code
+        while ((match = vsCodeCmdRegex.exec(message)) !== null) {
+            const cmdId = match[1].trim();
+            console.log('[Agent] Executando comando VS Code:', cmdId);
+            await this.executeVsCodeCommand(cmdId);
         }
     }
 
@@ -393,15 +499,236 @@ export class OllamaChatProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    private async editFile(filePath: string, newContent: string) {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('Nenhum workspace aberto');
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri;
+            const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+            const contentBytes = Buffer.from(newContent, 'utf8');
+            await vscode.workspace.fs.writeFile(fileUri, contentBytes);
+
+            this.view?.webview.postMessage({
+                command: 'fileEdited',
+                path: filePath,
+                success: true
+            });
+
+            vscode.window.showInformationMessage('Arquivo editado: ' + filePath);
+            
+            const document = await vscode.workspace.openTextDocument(fileUri);
+            await vscode.window.showTextDocument(document);
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao editar arquivo:', error);
+            this.view?.webview.postMessage({
+                command: 'fileEdited',
+                path: filePath,
+                success: false
+            });
+        }
+    }
+
+    private async findSymbols(query: string) {
+        try {
+            const workspaceSymbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+                'vscode.executeWorkspaceSymbolProvider',
+                query
+            );
+
+            if (!workspaceSymbols || workspaceSymbols.length === 0) {
+                throw new Error('Nenhum símbolo encontrado para: ' + query);
+            }
+
+            const symbolList = workspaceSymbols.slice(0, 10).map((sym) => {
+                const kindMap: { [key: number]: string } = {
+                    1: '📁', 2: '📦', 5: '🔷', 6: '🔶', 12: '⚡', 13: '🔑', 14: '📌',
+                    3: '📄', 4: '🎯', 11: '📝', 15: '🎨', 16: '🎪', 17: '🔗', 18: '📊'
+                };
+                const icon = kindMap[sym.kind] || '•';
+                return icon + ' ' + sym.name + ' (' + sym.containerName + ')';
+            }).join('\n');
+
+            const info = '🔍 Símbolos encontrados para "' + query + '":\n' + symbolList;
+            this.messages.push({ role: 'user', content: '[Busca de símbolos: ' + query + ']\n' + symbolList });
+
+            this.view?.webview.postMessage({
+                command: 'symbolsFound',
+                query: query,
+                content: info,
+                success: true
+            });
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao buscar símbolos:', error);
+            this.view?.webview.postMessage({
+                command: 'symbolsFound',
+                query: query,
+                content: 'Erro ao buscar símbolos: ' + (error instanceof Error ? error.message : String(error)),
+                success: false
+            });
+        }
+    }
+
+    private async findReferences(query: string) {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                throw new Error('Nenhum editor ativo');
+            }
+
+            const position = editor.selection.active;
+            const references = await vscode.commands.executeCommand<vscode.Location[]>(
+                'vscode.executeReferenceProvider',
+                editor.document.uri,
+                position
+            );
+
+            if (!references || references.length === 0) {
+                throw new Error('Nenhuma referência encontrada para: ' + query);
+            }
+
+            const refList = references.slice(0, 15).map((ref) => {
+                const fileName = ref.uri.fsPath.split('/').pop();
+                return '📍 ' + fileName + ':' + (ref.range.start.line + 1) + ':' + (ref.range.start.character + 1);
+            }).join('\n');
+
+            const info = '🔎 Referências encontradas para "' + query + '":\n' + refList;
+            this.messages.push({ role: 'user', content: '[Busca de referências: ' + query + ']\n' + refList });
+
+            this.view?.webview.postMessage({
+                command: 'referencesFound',
+                query: query,
+                content: info,
+                success: true
+            });
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao buscar referências:', error);
+            this.view?.webview.postMessage({
+                command: 'referencesFound',
+                query: query,
+                content: 'Erro ao buscar referências: ' + (error instanceof Error ? error.message : String(error)),
+                success: false
+            });
+        }
+    }
+
+    private async findText(searchQuery: string) {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('Nenhum workspace aberto');
+            }
+
+            // Abre a busca com a query
+            await vscode.commands.executeCommand('workbench.action.findInFiles', searchQuery);
+
+            const info = '🔍 Busca por "' + searchQuery + '" iniciada no workspace';
+            this.messages.push({ role: 'user', content: '[Busca de texto: ' + searchQuery + ']' });
+
+            this.view?.webview.postMessage({
+                command: 'textSearchStarted',
+                query: searchQuery,
+                content: info,
+                success: true
+            });
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao buscar texto:', error);
+            this.view?.webview.postMessage({
+                command: 'textSearchStarted',
+                query: searchQuery,
+                content: 'Erro ao buscar texto: ' + (error instanceof Error ? error.message : String(error)),
+                success: false
+            });
+        }
+    }
+
+    private async exploreProject() {
+        try {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('Nenhum workspace aberto');
+            }
+
+            // Mapeia a estrutura do projeto até 3 níveis
+            const structure = await this.buildProjectStructure(workspaceFolders[0].uri, 0, 3);
+
+            const info = '📊 Estrutura do Projeto:\n' + structure;
+            this.messages.push({ role: 'user', content: '[Exploração do projeto]\n' + structure });
+
+            this.view?.webview.postMessage({
+                command: 'projectExplored',
+                content: info,
+                success: true
+            });
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao explorar projeto:', error);
+            this.view?.webview.postMessage({
+                command: 'projectExplored',
+                content: 'Erro ao explorar projeto: ' + (error instanceof Error ? error.message : String(error)),
+                success: false
+            });
+        }
+    }
+
+    private async buildProjectStructure(uri: vscode.Uri, depth: number, maxDepth: number): Promise<string> {
+        if (depth > maxDepth) return '';
+
+        try {
+            const entries = await vscode.workspace.fs.readDirectory(uri);
+            const indent = '  '.repeat(depth);
+            let structure = '';
+
+            for (const [name, type] of entries) {
+                if (name.startsWith('.')) continue; // Ignora pastas ocultas
+                
+                const icon = type === vscode.FileType.Directory ? '📁' : '📄';
+                structure += indent + icon + ' ' + name + '\n';
+
+                if (type === vscode.FileType.Directory && depth < maxDepth) {
+                    const subPath = vscode.Uri.joinPath(uri, name);
+                    structure += await this.buildProjectStructure(subPath, depth + 1, maxDepth);
+                }
+            }
+
+            return structure;
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao construir estrutura:', error);
+            return '';
+        }
+    }
+
+    private async executeVsCodeCommand(commandId: string) {
+        try {
+            console.log('[Agent] Executando comando VS Code:', commandId);
+            await vscode.commands.executeCommand(commandId);
+
+            this.view?.webview.postMessage({
+                command: 'vsCodeCommandExecuted',
+                commandId: commandId,
+                success: true
+            });
+
+            vscode.window.showInformationMessage('Comando executado: ' + commandId);
+        } catch (error) {
+            console.error('[ChatProvider] Erro ao executar comando VS Code:', error);
+            this.view?.webview.postMessage({
+                command: 'vsCodeCommandExecuted',
+                commandId: commandId,
+                success: false
+            });
+            vscode.window.showErrorMessage('Erro ao executar comando: ' + commandId);
+        }
+    }
+
     private async handleUserMessage(text: string) {
         if (!text.trim()) return;
 
         console.log('[ChatProvider] Processando mensagem:', text.substring(0, 50));
 
         if (this.messages.length === 0) {
-            const systemPrompt = this.agentMode 
-                ? 'Você é um agente de programação com acesso REAL ao sistema de arquivos do usuário.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n### Criar arquivo (OBRIGATÓRIO usar este formato):\n[CRIAR_ARQUIVO:nome-do-arquivo.ext]\nconteúdo completo do arquivo aqui\n[/CRIAR_ARQUIVO]\n\n### Executar comando no terminal:\n[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]\n\n### Ler arquivo existente:\n[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]\n\n### Listar diretório:\n[LISTAR_DIRETORIO:caminho][/LISTAR_DIRETORIO]\n\n### Deletar arquivo:\n[DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]\n\n## REGRAS IMPORTANTES:\n1. Quando pedirem para criar um arquivo, USE SEMPRE [CRIAR_ARQUIVO:...][/CRIAR_ARQUIVO]\n2. NUNCA mostre código em blocos markdown (```) quando for criar arquivos\n3. O conteúdo entre as tags será salvo EXATAMENTE como está\n4. Para a raiz do projeto, use [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]\n5. CUIDADO ao deletar arquivos - confirme antes se necessário\n\n## EXEMPLO:\nUsuário: crie um arquivo hello.js\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log("Hello World!");\n[/CRIAR_ARQUIVO]'
-                : 'Você é um assistente de programação amigável e prestativo. Responda perguntas sobre código, ajude a explicar conceitos e forneça exemplos quando solicitado. Use blocos de código markdown para mostrar exemplos de código.';
+            const systemPrompt = this.buildSystemPrompt(this.agentMode);
             
             this.messages.push({
                 role: 'system',

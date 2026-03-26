@@ -1,0 +1,160 @@
+{
+  "version": "0.3.1",
+  "skills": [
+    {
+      "id": "criar_arquivo",
+      "name": "CRIAR_ARQUIVO",
+      "category": "file-operations",
+      "description": "Cria um novo arquivo no workspace",
+      "syntax": "[CRIAR_ARQUIVO:caminho/arquivo.ext]\nconteúdo do arquivo\n[/CRIAR_ARQUIVO]",
+      "example": "[CRIAR_ARQUIVO:hello.js]\nconsole.log('Hello World');\n[/CRIAR_ARQUIVO]",
+      "rules": [
+        "Use este comando APENAS para criar novos arquivos",
+        "O conteúdo será salvo EXATAMENTE como fornecido",
+        "NÃO use blocos de código markdown (```)",
+        "A extensão de arquivo deve ser incluída no caminho"
+      ]
+    },
+    {
+      "id": "editar_arquivo",
+      "name": "EDITAR_ARQUIVO",
+      "category": "file-operations",
+      "description": "Modifica o conteúdo de um arquivo existente",
+      "syntax": "[EDITAR_ARQUIVO:caminho/arquivo.ext]\nconteúdo completo atualizado\n[/EDITAR_ARQUIVO]",
+      "example": "[EDITAR_ARQUIVO:hello.js]\nconsole.log('Hello World Updated!');\n[/EDITAR_ARQUIVO]",
+      "rules": [
+        "Substitui o conteúdo COMPLETO do arquivo",
+        "NÃO use blocos de código markdown (```)",
+        "Sempre inclua todo o conteúdo do arquivo, não apenas a parte modificada"
+      ]
+    },
+    {
+      "id": "ler_arquivo",
+      "name": "LER_ARQUIVO",
+      "category": "file-operations",
+      "description": "Lê o conteúdo de um arquivo existente",
+      "syntax": "[LER_ARQUIVO:caminho/arquivo.ext][/LER_ARQUIVO]",
+      "example": "[LER_ARQUIVO:package.json][/LER_ARQUIVO]",
+      "rules": [
+        "Use para entender o conteúdo antes de editar",
+        "O resultado será adicionado ao contexto",
+        "Útil para análise e verificação"
+      ]
+    },
+    {
+      "id": "listar_diretorio",
+      "name": "LISTAR_DIRETORIO",
+      "category": "file-operations",
+      "description": "Lista o conteúdo de um diretório",
+      "syntax": "[LISTAR_DIRETORIO:caminho/para/dir][/LISTAR_DIRETORIO]",
+      "example": "[LISTAR_DIRETORIO:src][/LISTAR_DIRETORIO]",
+      "rules": [
+        "Para listar a raiz, use: [LISTAR_DIRETORIO:][/LISTAR_DIRETORIO]",
+        "Mostra arquivos e pastas com ícones",
+        "Útil para explorar estrutura antes de fazer mudanças"
+      ]
+    },
+    {
+      "id": "deletar_arquivo",
+      "name": "DELETAR_ARQUIVO",
+      "category": "file-operations",
+      "description": "Remove um arquivo do workspace",
+      "syntax": "[DELETAR_ARQUIVO:caminho/arquivo.ext][/DELETAR_ARQUIVO]",
+      "example": "[DELETAR_ARQUIVO:temp.js][/DELETAR_ARQUIVO]",
+      "rules": [
+        "CUIDADO: Esta ação é irreversível",
+        "Sempre confirme com o usuário antes de deletar",
+        "Use BUSCAR_REFS primeiro para verificar dependências"
+      ]
+    },
+    {
+      "id": "buscar_simbolos",
+      "name": "BUSCAR_SIMBOLOS",
+      "category": "code-intelligence",
+      "description": "Busca funções, classes, métodos e outros símbolos no workspace",
+      "syntax": "[BUSCAR_SIMBOLOS:nome_da_funcao][/BUSCAR_SIMBOLOS]",
+      "example": "[BUSCAR_SIMBOLOS:handleSubmit][/BUSCAR_SIMBOLOS]",
+      "rules": [
+        "Retorna até 10 primeiros resultados",
+        "Mostra localização e container de cada símbolo",
+        "Use para encontrar definições de funções/classes"
+      ]
+    },
+    {
+      "id": "buscar_refs",
+      "name": "BUSCAR_REFS",
+      "category": "code-intelligence",
+      "description": "Encontra todas as referências de um símbolo no workspace",
+      "syntax": "[BUSCAR_REFS:nome_da_variavel][/BUSCAR_REFS]",
+      "example": "[BUSCAR_REFS:myFunction][/BUSCAR_REFS]",
+      "rules": [
+        "Requer editor ativo para funcionar",
+        "Mostra arquivo e linha onde o símbolo é usado",
+        "Retorna até 15 primeiros resultados"
+      ]
+    },
+    {
+      "id": "buscar_texto",
+      "name": "BUSCAR_TEXTO",
+      "category": "code-intelligence",
+      "description": "Realiza busca full-text em todos os arquivos do workspace",
+      "syntax": "[BUSCAR_TEXTO:texto para buscar][/BUSCAR_TEXTO]",
+      "example": "[BUSCAR_TEXTO:TODO][/BUSCAR_TEXTO]",
+      "rules": [
+        "Abre o painel de busca do VS Code",
+        "Case-insensitive por padrão",
+        "Suporta regex se necessário"
+      ]
+    },
+    {
+      "id": "explorar_projeto",
+      "name": "EXPLORAR_PROJETO",
+      "category": "project-tools",
+      "description": "Mapeia e exibe a estrutura do projeto até 3 níveis",
+      "syntax": "[EXPLORAR_PROJETO][/EXPLORAR_PROJETO]",
+      "example": "[EXPLORAR_PROJETO][/EXPLORAR_PROJETO]",
+      "rules": [
+        "Use no início para entender a estrutura",
+        "Mostra até 3 níveis de profundidade",
+        "Ignora pastas ocultas (começadas com .)",
+        "Adiciona a estrutura ao contexto para análise"
+      ]
+    },
+    {
+      "id": "executar_vscode",
+      "name": "EXECUTAR_VSCODE",
+      "category": "project-tools",
+      "description": "Executa comandos nativos do VS Code",
+      "syntax": "[EXECUTAR_VSCODE:commandId][/EXECUTAR_VSCODE]",
+      "example": "[EXECUTAR_VSCODE:workbench.action.quickOpen][/EXECUTAR_VSCODE]",
+      "rules": [
+        "Requer commandId válido do VS Code",
+        "Exemplos: workbench.action.formatDocument, editor.action.save",
+        "Use com moderação"
+      ]
+    },
+    {
+      "id": "executar_comando",
+      "name": "EXECUTAR_COMANDO",
+      "category": "terminal",
+      "description": "Executa comandos no terminal do workspace",
+      "syntax": "[EXECUTAR_COMANDO]npm install express[/EXECUTAR_COMANDO]",
+      "example": "[EXECUTAR_COMANDO]git status[/EXECUTAR_COMANDO]",
+      "rules": [
+        "Suporta qualquer comando shell",
+        "Terminal é criado/reutilizado automaticamente",
+        "Cuidado com comandos destrutivos"
+      ]
+    }
+  ],
+  "globalRules": [
+    "NUNCA use blocos de código markdown (```) ao criar ou editar arquivos com CRIAR_ARQUIVO ou EDITAR_ARQUIVO",
+    "Use EXPLORAR_PROJETO antes de fazer mudanças importantes",
+    "Use BUSCAR_REFS antes de deletar ou refatorar",
+    "O conteúdo entre tags especiais será processado EXATAMENTE como fornecido",
+    "Use LISTAR_DIRETORIO para entender a estrutura antes de navegar",
+    "Combine múltiplos comandos em sequência quando necessário",
+    "Sempre confirme com o usuário antes de ações destrutivas (delete)"
+  ],
+  "systemPromptTemplate": "Você é um agente de programação com acesso REAL ao sistema de arquivos e ao VS Code.\n\nVocê DEVE usar os comandos especiais abaixo para executar ações REAIS. NÃO use blocos de código markdown para criar ou editar arquivos - use APENAS os comandos especiais.\n\n## COMANDOS DISPONÍVEIS:\n\n{SKILLS_LIST}\n\n## REGRAS GLOBAIS:\n{GLOBAL_RULES}\n\n## EXEMPLOS:\nUsuário: crie um arquivo hello.js e edite para adicionar uma função\nResposta correta:\n[CRIAR_ARQUIVO:hello.js]\nconsole.log('Hello World!');\n[/CRIAR_ARQUIVO]\n[EDITAR_ARQUIVO:hello.js]\nfunction greet(name) {\n  console.log('Hello, ' + name);\n}\ngreet('World');\n[/EDITAR_ARQUIVO]"
+}
